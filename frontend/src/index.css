@@ -1,0 +1,153 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  /* Typographie */
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.5rem;
+
+  /* Palette médicale sombre */
+  --color-bg-primary: #0a0f1e;
+  --color-bg-secondary: #0f1629;
+  --color-bg-tertiary: #141d35;
+  --color-bg-elevated: #1c2540;
+  --color-border: #243056;
+  --color-border-light: #2e3d6b;
+  --color-accent-blue: #378add;
+  --color-accent-cyan: #00c6ff;
+  --color-accent-green: #00e5a0;
+  --color-text-primary: #e8edf7;
+  --color-text-secondary: #7b8db8;
+  --color-text-muted: #4a5880;
+  --color-danger: #ff4757;
+  --color-warning: #ffa048;
+  --color-safe: #00e5a0;
+  --color-risk-low: #00e5a0;
+  --color-risk-medium: #ffa048;
+  --color-risk-high: #ff4757;
+}
+
+:root {
+  --bg-primary: #0a0f1e;
+  --bg-secondary: #0f1629;
+  --bg-tertiary: #141d35;
+  --bg-elevated: #1c2540;
+  --border: #243056;
+  --border-light: #2e3d6b;
+  --accent-blue: #378add;
+  --accent-cyan: #00c6ff;
+  --accent-green: #00e5a0;
+  --text-primary: #e8edf7;
+  --text-secondary: #7b8db8;
+  --text-muted: #4a5880;
+  --danger: #ff4757;
+  --warning: #ffa048;
+  --safe: #00e5a0;
+  --risk-low: #00e5a0;
+  --risk-medium: #ffa048;
+  --risk-high: #ff4757;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1 {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+@keyframes mediscan-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.92);
+  }
+}
+
+@keyframes mediscan-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-mediscan-pulse {
+  animation: mediscan-pulse 1.5s ease-in-out infinite;
+}
+
+.animate-mediscan-spin {
+  animation: mediscan-spin 0.8s linear infinite;
+}
+
+.mediscan-vertical-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #378add;
+  border: 2px solid #e8edf7;
+}
+
+.mediscan-vertical-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #378add;
+  border: 2px solid #e8edf7;
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: #111 !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .rapport-print-root {
+    min-height: auto;
+  }
+
+  .rapport-print-root article {
+    max-width: none;
+    padding: 0;
+  }
+}

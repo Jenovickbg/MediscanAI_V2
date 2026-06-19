@@ -1,0 +1,39 @@
+# Dépendances
+node_modules/
+frontend/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Base de données & cache
+*.db
+backend/cache/*
+!backend/cache/.gitkeep
+
+# Données médicales (ne pas versionner les DICOM réels)
+data/uploads/*
+data/train_images/*
+!data/uploads/.gitkeep
+!data/train_images/.gitkeep
+
+# Modèle PyTorch (fichier volumineux)
+backend/model/*.pth
+
+# Environnement
+.env
+.env.local
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
