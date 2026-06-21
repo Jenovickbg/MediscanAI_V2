@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, Scan } from 'lucide-react'
 
 import {
   AxialViewer,
+  MprViewer,
   SpineViewer3D,
   VertebraDetailPanel,
   VertebraScorePanel,
@@ -16,9 +17,10 @@ import {
   LoadingSpinner,
   ProgressBar,
 } from '../components/ui'
+import { expandVertebraScores, topDetectedVertebra } from '../utils/analyseScores'
 import { cn } from '../utils/cn'
 
-type ViewerTab = 'axial' | '3d'
+type ViewerTab = 'axial' | 'sagittal' | 'coronal' | '3d'
 type MobilePanel = 'scores' | 'viewer' | 'detail'
 
 export function ViewerPage() {
@@ -34,18 +36,20 @@ export function ViewerPage() {
   }, [resetViewer])
 
   useEffect(() => {
-    if (!result || result.scores_vertebres.length === 0) return
-
-    const topScore = result.scores_vertebres.reduce((max, score) =>
-      score.probabilite > max.probabilite ? score : max,
-    )
+    if (!result) return
+    const topScore = topDetectedVertebra(result)
+    if (!topScore) return
     setSelectedVertebra(topScore.vertebre as VertebraId, topScore.coupe_reference)
   }, [result, setSelectedVertebra])
 
   if (!studyId) return null
 
+  const vertebraScores = result ? expandVertebraScores(result) : []
+
   const tabs: { id: ViewerTab; label: string }[] = [
     { id: 'axial', label: 'Axiale' },
+    { id: 'sagittal', label: 'Sagittale' },
+    { id: 'coronal', label: 'Coronale' },
     { id: '3d', label: '3D' },
   ]
 
@@ -126,7 +130,7 @@ export function ViewerPage() {
             {result && (
               <VertebraScorePanel
                 studyId={studyId}
-                scores={result.scores_vertebres}
+                scores={vertebraScores}
                 scoreGlobal={result.score_global}
                 fractureDetectee={result.fracture_detectee}
               />
@@ -156,12 +160,11 @@ export function ViewerPage() {
                 {tab.label}
               </button>
             ))}
-            <span className="hidden text-xs text-text-muted xl:inline">
-              Sagittale / Coronale / MPR — à venir
-            </span>
           </div>
 
           {activeTab === 'axial' && <AxialViewer studyId={studyId} />}
+          {activeTab === 'sagittal' && <MprViewer studyId={studyId} view="sagittal" />}
+          {activeTab === 'coronal' && <MprViewer studyId={studyId} view="coronal" />}
           {activeTab === '3d' && <SpineViewer3D studyId={studyId} />}
         </main>
 
@@ -176,7 +179,7 @@ export function ViewerPage() {
             </h2>
           </div>
           {result ? (
-            <VertebraDetailPanel studyId={studyId} scores={result.scores_vertebres} />
+            <VertebraDetailPanel studyId={studyId} scores={vertebraScores} />
           ) : (
             <p className="p-4 text-sm text-text-secondary">Analyse requise</p>
           )}
@@ -192,7 +195,7 @@ export function ViewerPage() {
           {result ? (
             <VertebraScorePanel
               studyId={studyId}
-              scores={result.scores_vertebres}
+              scores={vertebraScores}
               scoreGlobal={result.score_global}
               fractureDetectee={result.fracture_detectee}
             />
@@ -208,7 +211,7 @@ export function ViewerPage() {
           )}
         >
           {result ? (
-            <VertebraDetailPanel studyId={studyId} scores={result.scores_vertebres} />
+            <VertebraDetailPanel studyId={studyId} scores={vertebraScores} />
           ) : (
             <p className="p-4 text-sm text-text-secondary">Analyse requise</p>
           )}

@@ -16,10 +16,10 @@ from app.core.config import settings
 from app.models.examen import Examen, Patient
 from app.models.resultat import ResultatAnalyse, ScoreVertebre, VERTEBRES
 from app.services.dicom_service import DicomService
+from app.services.triage_config import is_vertebra_at_risk, resolve_niveau_risque
 from app.services.upload_task_store import UploadTask, upload_task_store
 from app.utils.dicom_utils import is_dicom_file
 
-SUSPICION_THRESHOLD = 0.30
 ResultFilter = Literal["all", "fracture", "normal"]
 PeriodFilter = Literal["all", "week", "month"]
 
@@ -268,7 +268,7 @@ class ExamenService:
         at_risk = [
             score.vertebre
             for score in scores
-            if score.probabilite >= SUSPICION_THRESHOLD
+            if is_vertebra_at_risk(score.probabilite, score.niveau_risque)
         ]
         if at_risk:
             return sorted(at_risk, key=lambda v: VERTEBRES.index(v) if v in VERTEBRES else 99)

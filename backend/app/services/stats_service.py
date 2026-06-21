@@ -8,9 +8,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.examen import Examen
 from app.models.resultat import ResultatAnalyse, ScoreVertebre, VERTEBRES
+from app.services.triage_config import is_vertebra_at_risk, resolve_niveau_risque
 
-SUSPICION_THRESHOLD = 0.30
-FRACTURE_THRESHOLD = 0.60
 PeriodKey = Literal["7d", "30d", "90d"]
 PERIOD_DAYS: dict[str, int] = {"7d": 7, "30d": 30, "90d": 90}
 
@@ -146,7 +145,7 @@ class StatsService:
             for score in resultat.scores_vertebres:
                 if score.vertebre not in vertebra_fracture_counts:
                     continue
-                if score.probabilite >= FRACTURE_THRESHOLD:
+                if resolve_niveau_risque(score.probabilite, score.niveau_risque) == "eleve":
                     vertebra_fracture_counts[score.vertebre] += 1
                 vertebra_score_sums[score.vertebre] += score.probabilite
                 vertebra_score_counts[score.vertebre] += 1
@@ -186,7 +185,7 @@ class StatsService:
         at_risk = [
             score.vertebre
             for score in scores
-            if score.probabilite >= SUSPICION_THRESHOLD
+            if is_vertebra_at_risk(score.probabilite, score.niveau_risque)
         ]
         if at_risk:
             return sorted(at_risk, key=lambda v: VERTEBRES.index(v) if v in VERTEBRES else 99)

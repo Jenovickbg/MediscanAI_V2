@@ -11,6 +11,8 @@ from PIL import Image
 
 from app.utils.dicom_utils import is_dicom_file
 
+_volume_cache: dict[str, tuple[np.ndarray, dict[str, Any]]] = {}
+
 
 class DicomService:
     def load_and_sort_slices(self, study_path: str) -> tuple[np.ndarray, dict[str, Any]]:
@@ -19,7 +21,7 @@ class DicomService:
         Retourne un volume (n_slices, H, W) en int16 Hounsfield et les espacements.
         """
         path = Path(study_path)
-        slices: list[tuple[float, np.ndarray, tuple[float, float] | None]] = []
+        slices: list[tuple[float, int, np.ndarray, tuple[float, float] | None, float]] = []
 
         for file_path in path.iterdir():
             if not file_path.is_file() or not is_dicom_file(file_path.name):
@@ -28,37 +30,67 @@ class DicomService:
                 ds = pydicom.dcmread(str(file_path), force=True)
                 if not hasattr(ds, "pixel_array"):
                     continue
-                pixel_array = ds.pixel_array.astype(np.float32)
-                slope = float(getattr(ds, "RescaleSlope", 1))
-                intercept = float(getattr(ds, "RescaleIntercept", 0))
-                hu = pixel_array * slope + intercept
+
+                hu = self._pixel_array_to_hounseld(ds)
 
                 z_pos = 0.0
                 if hasattr(ds, "ImagePositionPatient") and ds.ImagePositionPatient is not None:
                     z_pos = float(ds.ImagePositionPatient[2])
 
+                instance_number = int(getattr(ds, "InstanceNumber", 0) or 0)
+
                 spacing = None
                 if hasattr(ds, "PixelSpacing") and ds.PixelSpacing is not None:
                     spacing = (float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1]))
 
-                slices.append((z_pos, hu.astype(np.int16), spacing))
+                slice_thickness = float(getattr(ds, "SliceThickness", 1.0) or 1.0)
+
+                slices.append((z_pos, instance_number, hu, spacing, slice_thickness))
             except Exception:
                 continue
 
         if not slices:
             raise ValueError("Impossible de charger les coupes DICOM")
 
-        slices.sort(key=lambda item: item[0])
-        volume = np.stack([item[1] for item in slices], axis=0)
-        pixel_spacing = slices[0][2] or (1.0, 1.0)
+        unique_z = len({round(item[0], 4) for item in slices})
+        if unique_z > 1:
+            sort_method = "ImagePositionPatient[2]"
+            slices.sort(key=lambda item: (item[0], item[1]))
+        else:
+            sort_method = "InstanceNumber (IPP[2] absent ou identique)"
+            slices.sort(key=lambda item: item[1])
+
+        volume = np.stack([item[2] for item in slices], axis=0).astype(np.float32)
+        pixel_spacing = slices[0][3] or (1.0, 1.0)
+        slice_thickness = float(np.median([item[4] for item in slices]))
 
         spacing_dict = {
             "pixel_spacing": list(pixel_spacing),
-            "slice_thickness": 1.0,
+            "slice_thickness": slice_thickness,
             "slice_positions": [item[0] for item in slices],
+            "volume_kind": "dicom_hu",
+            "hu_rescale_applied": True,
+            "sort_method": sort_method,
+            "n_slices": volume.shape[0],
         }
 
+        print(
+            "[DicomService][DIAG] Volume chargé — "
+            f"tri={sort_method}, n={volume.shape[0]}, "
+            f"HU min={float(volume.min()):.1f}, max={float(volume.max()):.1f}, "
+            f"mean={float(volume.mean()):.2f}, "
+            f"RescaleSlope/Intercept appliqués=True"
+        )
+
         return volume, spacing_dict
+
+    @staticmethod
+    def _pixel_array_to_hounseld(ds: pydicom.Dataset) -> np.ndarray:
+        """Convertit les pixels bruts en Unités Hounsfield via RescaleSlope / RescaleIntercept."""
+        pixel_array = ds.pixel_array.astype(np.float32)
+        slope = float(getattr(ds, "RescaleSlope", 1) or 1)
+        intercept = float(getattr(ds, "RescaleIntercept", 0) or 0)
+        return pixel_array * slope + intercept
 
     def load_volume_from_study(self, study_path: str) -> tuple[np.ndarray, dict[str, Any]]:
         """Charge un volume DICOM ou, à défaut, une pile PNG (examens démo)."""
@@ -75,7 +107,7 @@ class DicomService:
         slices: list[np.ndarray] = []
         for png in png_files:
             with Image.open(png) as img:
-                arr = np.array(img.convert("L"), dtype=np.int16)
+                arr = np.array(img.convert("L"), dtype=np.float32)
                 slices.append(arr)
 
         volume = np.stack(slices, axis=0)
@@ -83,8 +115,60 @@ class DicomService:
             "pixel_spacing": [0.5, 0.5],
             "slice_thickness": 1.0,
             "slice_positions": list(range(volume.shape[0])),
+            "volume_kind": "png_preview",
+            "hu_rescale_applied": False,
+            "sort_method": "nom_fichier_png (apercu demo)",
+            "n_slices": volume.shape[0],
         }
+
+        print(
+            "[DicomService][DIAG] Volume PNG demo — "
+            f"HU non applicable, min={float(volume.min()):.1f}, max={float(volume.max()):.1f}, "
+            f"mean={float(volume.mean()):.2f}, tri={spacing_dict['sort_method']}"
+        )
+
         return volume, spacing_dict
+
+    def get_cached_volume(self, study_path: str) -> tuple[np.ndarray, dict[str, Any]]:
+        """Retourne le volume en cache ou le charge une seule fois par chemin d'examen."""
+        key = str(Path(study_path).resolve())
+        if key not in _volume_cache:
+            _volume_cache[key] = self.load_volume_from_study(study_path)
+        return _volume_cache[key]
+
+    @staticmethod
+    def clear_volume_cache() -> None:
+        _volume_cache.clear()
+
+    @staticmethod
+    def get_mpr_slice(volume: np.ndarray, view: str, index: int) -> np.ndarray:
+        """Extrait une coupe MPR (axiale, sagittale ou coronale) — ré-échantillonnage pur."""
+        if view == "axial":
+            idx = max(0, min(index, volume.shape[0] - 1))
+            return volume[idx, :, :]
+        if view == "sagittal":
+            idx = max(0, min(index, volume.shape[2] - 1))
+            return volume[:, :, idx]
+        if view == "coronal":
+            idx = max(0, min(index, volume.shape[1] - 1))
+            return volume[:, idx, :]
+        raise ValueError(f"Vue inconnue : {view}")
+
+    def render_mpr_png(
+        self,
+        volume: np.ndarray,
+        view: str,
+        index: int,
+        wc: float = 300,
+        ww: float = 1500,
+    ) -> bytes:
+        slice_data = self.get_mpr_slice(volume, view, index)
+        normalized = self.apply_windowing(slice_data.astype(np.float32), wc, ww)
+        image_array = (normalized * 255).astype(np.uint8)
+        image = Image.fromarray(image_array, mode="L")
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
 
     def extract_study_metadata(self, study_path: Path) -> dict[str, Any]:
         path = Path(study_path)

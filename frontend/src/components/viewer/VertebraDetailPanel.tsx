@@ -7,6 +7,7 @@ import {
   generateVertebraExplanation,
   gradCamConfidence,
 } from '../../utils/vertebraExplanation'
+import { niveauLabel, niveauToRiskLevel } from '../../utils/analyseScores'
 import { Badge, ProgressBar } from '../ui'
 import { VertebraGradCamThumbnail } from './VertebraGradCamThumbnail'
 
@@ -15,16 +16,9 @@ interface VertebraDetailPanelProps {
   scores: ScoreVertebre[]
 }
 
-function riskLevel(probability: number): 'low' | 'medium' | 'high' {
-  if (probability >= 0.6) return 'high'
-  if (probability >= 0.3) return 'medium'
-  return 'low'
-}
-
-function riskLabel(probability: number): string {
-  if (probability >= 0.6) return 'ÉLEVÉ'
-  if (probability >= 0.3) return 'MODÉRÉ'
-  return 'FAIBLE'
+function riskBadgeVariant(niveau: ScoreVertebre['niveau_risque']) {
+  const level = niveauToRiskLevel(niveau)
+  return level === 'high' ? 'danger' : level === 'medium' ? 'warning' : 'success'
 }
 
 const VERTEBRA_NAMES: Record<string, string> = {
@@ -53,7 +47,7 @@ export function VertebraDetailPanel({ studyId, scores }: VertebraDetailPanelProp
   }
 
   const pct = score.probabilite * 100
-  const level = riskLevel(score.probabilite)
+  const level = niveauToRiskLevel(score.niveau_risque)
   const explanation = generateVertebraExplanation(score)
   const activationScore = gradCamConfidence(score.probabilite)
 
@@ -83,10 +77,8 @@ export function VertebraDetailPanel({ studyId, scores }: VertebraDetailPanelProp
         <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-muted">
           Risque
         </p>
-        <Badge
-          variant={level === 'high' ? 'danger' : level === 'medium' ? 'warning' : 'success'}
-        >
-          {riskLabel(score.probabilite)}
+        <Badge variant={riskBadgeVariant(score.niveau_risque)}>
+          {niveauLabel(score.niveau_risque)}
         </Badge>
       </div>
 

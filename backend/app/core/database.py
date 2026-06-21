@@ -24,10 +24,11 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    """Crée les tables SQLite au démarrage."""
+    """Crée les tables SQLite au démarrage et applique les migrations légères."""
     from app.models import examen, resultat, utilisateur  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _migrate_sqlite_schema()
 
     db = SessionLocal()
     try:
@@ -36,3 +37,22 @@ def init_db() -> None:
         seed_default_users(db)
     finally:
         db.close()
+
+
+def _migrate_sqlite_schema() -> None:
+    """Ajoute les colonnes manquantes sur SQLite sans Alembic."""
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        return
+
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "scores_vertebres" not in inspector.get_table_names():
+        return
+
+    columns = {col["name"] for col in inspector.get_columns("scores_vertebres")}
+    if "niveau_risque" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE scores_vertebres ADD COLUMN niveau_risque VARCHAR(16)")
+            )

@@ -10,6 +10,14 @@ from PIL import Image
 from app.core.config import BACKEND_DIR, settings
 from app.models.resultat import VERTEBRES
 from app.services.dicom_service import DicomService
+from app.services.model2_localization import Model2LocalizationService
+from app.services.model3_vertebra import Model3VertebraService
+from app.services.triage_config import (
+    TriageThresholds,
+    classifier_triage,
+    is_coupe_flaguee,
+    load_triage_thresholds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,21 +33,40 @@ LOCALISATIONS: dict[str, str] = {
 
 
 class PipelineAIService:
-    """Pipeline DenseNet-121 2.5D avec repli mock si le modèle est absent."""
+    """Orchestrateur pipeline IA — Modèles 1 (triage), 2 (localisation), 3 (vertèbre)."""
 
     def __init__(self) -> None:
         self.dicom_service = DicomService()
-        self.threshold = 0.03
-        self.model = None
+        self.thresholds: TriageThresholds = load_triage_thresholds()
+        self.model_1 = None
+        self.model_2 = Model2LocalizationService(dicom_service=self.dicom_service)
+        self.model_3 = Model3VertebraService()
         self.device = None
         self.use_mock = True
         self.model_loaded = False
-        self._try_load_model()
+        self._try_load_model_1()
 
-    def _try_load_model(self) -> None:
-        model_path = BACKEND_DIR / settings.MODEL_PATH
+    @property
+    def threshold(self) -> float:
+        """Compatibilité — seuil bas du triage (ancien code)."""
+        return self.thresholds.seuil_bas
+
+    @property
+    def model(self):
+        """Alias rétrocompatibilité Grad-CAM."""
+        return self.model_1
+
+    def reload_thresholds(self) -> None:
+        """Recharge les seuils depuis le fichier JSON (sans redéployer)."""
+        self.thresholds = load_triage_thresholds()
+
+    def _try_load_model_1(self) -> None:
+        model_path = BACKEND_DIR / settings.MODEL_1_PATH
         if not model_path.exists():
-            logger.info("Modèle PyTorch absent — mode mock activé")
+            logger.info(
+                "Modèle 1 absent (%s) — mode mock activé",
+                settings.MODEL_1_PATH,
+            )
             return
 
         try:
@@ -47,7 +74,7 @@ class PipelineAIService:
             import timm
 
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.model = timm.create_model(
+            self.model_1 = timm.create_model(
                 "densenet121",
                 pretrained=False,
                 in_chans=5,
@@ -58,17 +85,21 @@ class PipelineAIService:
                 state = torch.load(model_path, map_location="cpu", weights_only=True)
             except TypeError:
                 state = torch.load(model_path, map_location="cpu")
-            self.model.load_state_dict(state)
-            self.model.eval()
-            self.model.to(self.device)
+            self.model_1.load_state_dict(state)
+            self.model_1.eval()
+            self.model_1.to(self.device)
             self.use_mock = False
             self.model_loaded = True
-            logger.info("Modèle DenseNet-121 2.5D chargé sur %s", self.device)
+            logger.info("Modèle 1 (DenseNet-121 2.5D) chargé sur %s", self.device)
         except Exception as exc:
-            logger.warning("Impossible de charger le modèle — mode mock: %s", exc)
-            self.model = None
+            logger.warning("Impossible de charger le Modèle 1 — mode mock: %s", exc)
+            self.model_1 = None
             self.use_mock = True
             self.model_loaded = False
+
+    def build_25d_stack(self, volume: np.ndarray, slice_idx: int) -> np.ndarray:
+        """Extrait 5 coupes consécutives (2.5D) pour le Modèle 1."""
+        return self.load_25d_slice(volume, slice_idx)
 
     def load_25d_slice(self, volume: np.ndarray, slice_idx: int) -> np.ndarray:
         """Extrait 5 coupes consécutives, fenêtrage osseux, normalisation, resize 384."""
@@ -95,108 +126,429 @@ class PipelineAIService:
         return VERTEBRES[segment]
 
     def _predict_slice_score(self, volume: np.ndarray, slice_idx: int) -> float:
-        if self.use_mock or self.model is None:
+        if self.use_mock or self.model_1 is None:
             return 0.0
 
         import torch
 
-        tensor_input = self.load_25d_slice(volume, slice_idx)
+        tensor_input = self.build_25d_stack(volume, slice_idx)
         tensor = torch.from_numpy(tensor_input).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            output = self.model(tensor)
+            output = self.model_1(tensor)
             score = torch.sigmoid(output).item()
         return float(score)
 
-    def _mock_predict(self, volume: np.ndarray, study_id: str) -> dict[str, Any]:
-        """Scores réalistes déterministes pour tests sans modèle."""
-        seed = abs(hash(study_id)) % (2**32)
-        rng = np.random.default_rng(seed)
-        n_slices = volume.shape[0]
+    def _mock_slice_score(
+        self,
+        slice_idx: int,
+        n_slices: int,
+        rng: np.random.Generator,
+    ) -> float:
+        vertebra = self._slice_to_vertebra(slice_idx, n_slices)
+        base = {
+            "C1": 0.08,
+            "C2": 0.23,
+            "C3": 0.05,
+            "C4": 0.67,
+            "C5": 0.976,
+            "C6": 0.31,
+            "C7": 0.12,
+        }
+        noise = float(rng.uniform(-0.04, 0.04))
+        return max(0.0, min(1.0, base.get(vertebra, 0.1) + noise))
 
-        scores_par_coupe: list[tuple[int, float]] = []
-        scores_par_vertebre: dict[str, float] = {v: 0.0 for v in VERTEBRES}
-        coupes_positives: list[int] = []
+    def run_model_1_triage(self, volume: np.ndarray, study_id: str = "") -> list[dict[str, Any]]:
+        """
+        Modèle 1 sur TOUTES les coupes — probabilité + catégorie de triage.
+        Retourne une entrée par coupe : { slice, score, categorie }.
+        """
+        n_slices = volume.shape[0]
+        results: list[dict[str, Any]] = []
+
+        if self.use_mock:
+            seed = abs(hash(study_id)) % (2**32)
+            rng = np.random.default_rng(seed)
+            for slice_idx in range(n_slices):
+                score = self._mock_slice_score(slice_idx, n_slices, rng)
+                categorie = classifier_triage(score, self.thresholds)
+                results.append({"slice": slice_idx, "score": score, "categorie": categorie})
+            return results
 
         for slice_idx in range(n_slices):
-            vertebra = self._slice_to_vertebra(slice_idx, n_slices)
-            base = {"C1": 0.08, "C2": 0.23, "C3": 0.05, "C4": 0.67, "C5": 0.976, "C6": 0.31, "C7": 0.12}
-            noise = float(rng.uniform(-0.04, 0.04))
-            score = max(0.0, min(1.0, base.get(vertebra, 0.1) + noise))
-            scores_par_coupe.append((slice_idx, score))
-            scores_par_vertebre[vertebra] = max(scores_par_vertebre[vertebra], score)
-            if score > self.threshold:
-                coupes_positives.append(slice_idx)
+            score = self._predict_slice_score(volume, slice_idx)
+            categorie = classifier_triage(score, self.thresholds)
+            results.append({"slice": slice_idx, "score": score, "categorie": categorie})
 
-        score_global = max(scores_par_vertebre.values())
-        fracture_detectee = score_global > self.threshold
+        return results
+
+    @staticmethod
+    def coupes_flaguees_from_triage(triage_par_coupe: list[dict[str, Any]]) -> list[int]:
+        """Coupes transmises aux Modèles 2 et 3 (incertain ou eleve)."""
+        return [
+            int(entry["slice"])
+            for entry in triage_par_coupe
+            if is_coupe_flaguee(entry["categorie"])
+        ]
+
+    @staticmethod
+    def _fracture_from_triage(
+        triage_par_coupe: list[dict[str, Any]],
+        seuil_haut: float,
+    ) -> bool:
+        """Fracture si au moins une coupe est eleve, ou score max >= seuil haut."""
+        if not triage_par_coupe:
+            return False
+        if any(entry["categorie"] == "eleve" for entry in triage_par_coupe):
+            return True
+        max_score = max(float(entry["score"]) for entry in triage_par_coupe)
+        return max_score >= seuil_haut
+
+    def run_model_2_localization(
+        self,
+        volume: np.ndarray,
+        coupes_a_traiter: list[int],
+        study_id: str = "",
+        triage_par_coupe: list[dict[str, Any]] | None = None,
+    ) -> dict[int, dict[str, Any]]:
+        """Modèle 2 — bbox fracture sur coupes flaguées uniquement."""
+        triage_scores: dict[int, float] = {}
+        if triage_par_coupe:
+            triage_scores = {
+                int(entry["slice"]): float(entry["score"]) for entry in triage_par_coupe
+            }
+        return self.model_2.run(
+            volume,
+            coupes_a_traiter,
+            study_id=study_id,
+            triage_scores=triage_scores,
+        )
+
+    def run_model_3_vertebra(
+        self,
+        volume: np.ndarray,
+        coupes_a_traiter: list[int],
+        study_id: str = "",
+    ) -> dict[int, str]:
+        """Modèle 3 — classification vertèbre sur coupes flaguées uniquement."""
+        return self.model_3.run(
+            volume,
+            coupes_a_traiter,
+            study_id=study_id,
+            stack_builder=self.build_25d_stack,
+        )
+
+    def _execute_pipeline_phases(
+        self,
+        volume: np.ndarray,
+        study_id: str = "",
+    ) -> tuple[
+        list[dict[str, Any]],
+        list[int],
+        dict[int, dict[str, Any]],
+        dict[int, str],
+    ]:
+        """Phases 1–2 : triage complet puis Modèles 2 et 3 sur coupes flaguées."""
+        triage_par_coupe = self.run_model_1_triage(volume, study_id=study_id)
+        coupes_flaguees = self.coupes_flaguees_from_triage(triage_par_coupe)
+
+        resultats_localisation: dict[int, dict[str, Any]] = {}
+        resultats_vertebre: dict[int, str] = {}
+        if coupes_flaguees:
+            resultats_localisation = self.run_model_2_localization(
+                volume,
+                coupes_flaguees,
+                study_id=study_id,
+                triage_par_coupe=triage_par_coupe,
+            )
+            resultats_vertebre = self.run_model_3_vertebra(
+                volume,
+                coupes_flaguees,
+                study_id=study_id,
+            )
+
+        return triage_par_coupe, coupes_flaguees, resultats_localisation, resultats_vertebre
+
+    def _agreger_par_vertebre(
+        self,
+        triage_par_coupe: list[dict[str, Any]],
+        resultats_bbox: dict[int, dict[str, Any]],
+        resultats_vertebre: dict[int, str],
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Agrège par vertèbre — retient la coupe au score de fracture le plus élevé.
+        Contrat : { "C5": { probabilite, bounding_box, coupe_reference, niveau_risque } }.
+        """
+        score_by_slice = {int(entry["slice"]): float(entry["score"]) for entry in triage_par_coupe}
+        par_vertebre: dict[str, dict[str, Any]] = {}
+
+        for slice_idx, vlabel in resultats_vertebre.items():
+            if vlabel == "hors_zone":
+                continue
+
+            score = score_by_slice.get(slice_idx, 0.0)
+            bbox_raw = resultats_bbox.get(slice_idx, {}).get("bbox")
+            bounding_box: dict[str, int] | None = None
+            if bbox_raw and len(bbox_raw) == 4:
+                x, y, w, h = bbox_raw
+                bounding_box = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+
+            niveau_risque = classifier_triage(score, self.thresholds)
+            entry = {
+                "probabilite": score,
+                "bounding_box": bounding_box,
+                "coupe_reference": int(slice_idx),
+                "niveau_risque": niveau_risque,
+            }
+
+            if vlabel not in par_vertebre or score > par_vertebre[vlabel]["probabilite"]:
+                par_vertebre[vlabel] = entry
+
+        return par_vertebre
+
+    def _generer_rapport_clinique(self, scores_par_vertebre: dict[str, dict[str, Any]]) -> str:
+        """Rapport clinique à partir du contrat agrégé par vertèbre."""
+        if not scores_par_vertebre:
+            return "Aucune anomalie détectée sur l'ensemble de l'examen."
+
+        flat_scores = {v: float(d["probabilite"]) for v, d in scores_par_vertebre.items()}
+        fracture_detectee = any(
+            d.get("niveau_risque") in ("incertain", "eleve") for d in scores_par_vertebre.values()
+        )
+        return self.generate_clinical_report(flat_scores, fracture_detectee=fracture_detectee)
+
+    def analyser_examen(self, volume: np.ndarray, study_id: str = "") -> dict[str, Any]:
+        """
+        Point d'entrée principal — orchestration complète des 3 modèles (4 phases).
+
+        Retourne le contrat JSON final pour le frontend et la persistance.
+        """
+        triage_par_coupe, coupes_flaguees, resultats_bbox, resultats_vertebre = (
+            self._execute_pipeline_phases(volume, study_id=study_id)
+        )
+
+        if not coupes_flaguees:
+            return {
+                "study_id": study_id,
+                "fracture_detectee": False,
+                "scores_par_vertebre": {},
+                "rapport_clinique": "Aucune anomalie détectée sur l'ensemble de l'examen.",
+                "mode_mock": self.use_mock,
+                "mode_mock_model_2": self.model_2.use_mock,
+                "mode_mock_model_3": self.model_3.use_mock,
+                "triage_par_coupe": triage_par_coupe,
+                "coupes_flaguees": [],
+            }
+
+        scores_par_vertebre = self._agreger_par_vertebre(
+            triage_par_coupe,
+            resultats_bbox,
+            resultats_vertebre,
+        )
+        rapport = self._generer_rapport_clinique(scores_par_vertebre)
+        fracture_detectee = self._fracture_from_triage(
+            triage_par_coupe,
+            self.thresholds.seuil_haut,
+        )
+
+        return {
+            "study_id": study_id,
+            "fracture_detectee": fracture_detectee,
+            "scores_par_vertebre": scores_par_vertebre,
+            "rapport_clinique": rapport,
+            "mode_mock": self.use_mock,
+            "mode_mock_model_2": self.model_2.use_mock,
+            "mode_mock_model_3": self.model_3.use_mock,
+            "triage_par_coupe": triage_par_coupe,
+            "coupes_flaguees": coupes_flaguees,
+            "resultats_localisation": resultats_bbox,
+            "resultats_vertebre": resultats_vertebre,
+        }
+
+    def _aggregate_vertebra_scores(
+        self,
+        triage_par_coupe: list[dict[str, Any]],
+        n_slices: int,
+    ) -> dict[str, float]:
+        scores_par_vertebre: dict[str, float] = {v: 0.0 for v in VERTEBRES}
+        for entry in triage_par_coupe:
+            slice_idx = int(entry["slice"])
+            score = float(entry["score"])
+            vertebra = self._slice_to_vertebra(slice_idx, n_slices)
+            scores_par_vertebre[vertebra] = max(scores_par_vertebre[vertebra], score)
+        return scores_par_vertebre
+
+    def _prediction_from_triage(
+        self,
+        triage_par_coupe: list[dict[str, Any]],
+        n_slices: int,
+        mode_mock: bool,
+        resultats_localisation: dict[int, dict[str, Any]] | None = None,
+        resultats_vertebre: dict[int, str] | None = None,
+    ) -> dict[str, Any]:
+        coupes_flaguees = self.coupes_flaguees_from_triage(triage_par_coupe)
+        scores_par_vertebre = self._aggregate_vertebra_scores(triage_par_coupe, n_slices)
+        score_global = max(scores_par_vertebre.values()) if scores_par_vertebre else 0.0
+
+        scores_par_coupe = [
+            (int(entry["slice"]), float(entry["score"])) for entry in triage_par_coupe
+        ]
 
         return {
             "scores_par_coupe": scores_par_coupe,
+            "triage_par_coupe": triage_par_coupe,
             "scores_par_vertebre": scores_par_vertebre,
-            "coupes_positives": coupes_positives,
-            "fracture_detectee": fracture_detectee,
+            "coupes_flaguees": coupes_flaguees,
+            "coupes_positives": coupes_flaguees,
+            "resultats_localisation": resultats_localisation or {},
+            "resultats_vertebre": resultats_vertebre or {},
+            "fracture_detectee": self._fracture_from_triage(
+                triage_par_coupe,
+                self.thresholds.seuil_haut,
+            ),
             "score_global": score_global,
-            "mode_mock": True,
+            "mode_mock": mode_mock,
+            "mode_mock_model_2": self.model_2.use_mock,
+            "mode_mock_model_3": self.model_3.use_mock,
+            "thresholds": {
+                "seuil_bas": self.thresholds.seuil_bas,
+                "seuil_haut": self.thresholds.seuil_haut,
+            },
         }
+
+    def _mock_predict(self, volume: np.ndarray, study_id: str) -> dict[str, Any]:
+        """Scores réalistes déterministes pour tests sans Modèle 1."""
+        triage, _, loc, vert = self._execute_pipeline_phases(volume, study_id=study_id)
+        return self._prediction_from_triage(
+            triage,
+            volume.shape[0],
+            mode_mock=True,
+            resultats_localisation=loc,
+            resultats_vertebre=vert,
+        )
 
     def predict_volume(self, volume: np.ndarray, study_id: str = "") -> dict[str, Any]:
-        if self.use_mock:
-            return self._mock_predict(volume, study_id)
+        triage, _, loc, vert = self._execute_pipeline_phases(volume, study_id=study_id)
+        return self._prediction_from_triage(
+            triage,
+            volume.shape[0],
+            mode_mock=self.use_mock,
+            resultats_localisation=loc,
+            resultats_vertebre=vert,
+        )
 
-        n_slices = volume.shape[0]
-        scores_par_coupe: list[tuple[int, float]] = []
-        scores_par_vertebre: dict[str, float] = {v: 0.0 for v in VERTEBRES}
-        coupes_positives: list[int] = []
+    @staticmethod
+    def _normalize_bbox(bbox: list[int], width: int = 512, height: int = 512) -> tuple[float, float, float, float]:
+        x, y, bw, bh = bbox
+        return x / width, y / height, bw / width, bh / height
 
-        # Analyse chaque 2 coupes pour accélérer l'inférence
-        step = max(1, n_slices // 120)
-        for slice_idx in range(0, n_slices, step):
-            score = self._predict_slice_score(volume, slice_idx)
-            vertebra = self._slice_to_vertebra(slice_idx, n_slices)
-            scores_par_coupe.append((slice_idx, score))
-            scores_par_vertebre[vertebra] = max(scores_par_vertebre[vertebra], score)
-            if score > self.threshold:
-                coupes_positives.append(slice_idx)
-
-        score_global = max(scores_par_vertebre.values()) if scores_par_vertebre else 0.0
-        return {
-            "scores_par_coupe": scores_par_coupe,
-            "scores_par_vertebre": scores_par_vertebre,
-            "coupes_positives": coupes_positives,
-            "fracture_detectee": score_global > self.threshold,
-            "score_global": score_global,
-            "mode_mock": False,
-        }
-
-    def build_vertebra_details(
+    def build_vertebra_details_from_analyse(
         self,
-        prediction: dict[str, Any],
+        analyse: dict[str, Any],
         n_slices: int,
     ) -> list[dict[str, Any]]:
-        """Construit les détails par vertèbre avec localisation et bounding box estimée."""
+        """Construit les lignes DB à partir du contrat `analyser_examen()`."""
+        aggregated: dict[str, dict[str, Any]] = analyse.get("scores_par_vertebre", {})
         details: list[dict[str, Any]] = []
-        scores_par_coupe = prediction["scores_par_coupe"]
 
         for vertebre in VERTEBRES:
-            prob = float(prediction["scores_par_vertebre"].get(vertebre, 0.0))
             segment_idx = VERTEBRES.index(vertebre)
             coupe_ref = int((segment_idx + 0.5) / 7 * max(n_slices - 1, 0))
+            bbox_x, bbox_y, bbox_w, bbox_h = 0.35 + segment_idx * 0.03, 0.25, 0.18, 0.22
+            prob = 0.0
 
-            for slice_idx, score in scores_par_coupe:
-                if self._slice_to_vertebra(slice_idx, n_slices) == vertebre and score >= prob - 0.01:
-                    coupe_ref = slice_idx
-                    break
+            if vertebre in aggregated:
+                entry = aggregated[vertebre]
+                prob = float(entry["probabilite"])
+                coupe_ref = int(entry["coupe_reference"])
+                bbox = entry.get("bounding_box")
+                if bbox:
+                    bbox_x, bbox_y, bbox_w, bbox_h = self._normalize_bbox(
+                        [bbox["x"], bbox["y"], bbox["w"], bbox["h"]],
+                    )
 
             details.append(
                 {
                     "vertebre": vertebre,
                     "probabilite": prob,
                     "localisation": LOCALISATIONS.get(vertebre, "Région vertébrale"),
-                    "bounding_box_x": 0.35 + segment_idx * 0.03,
-                    "bounding_box_y": 0.25,
-                    "bounding_box_w": 0.18,
-                    "bounding_box_h": 0.22,
+                    "bounding_box_x": bbox_x,
+                    "bounding_box_y": bbox_y,
+                    "bounding_box_w": bbox_w,
+                    "bounding_box_h": bbox_h,
+                    "coupe_reference": coupe_ref,
+                    "niveau_risque": aggregated.get(vertebre, {}).get("niveau_risque"),
+                }
+            )
+        return details
+
+    @staticmethod
+    def score_global_from_analyse(analyse: dict[str, Any]) -> float:
+        scores = analyse.get("scores_par_vertebre") or {}
+        if not scores:
+            triage = analyse.get("triage_par_coupe") or []
+            if triage:
+                return max(float(entry["score"]) for entry in triage)
+            return 0.0
+        return max(float(entry["probabilite"]) for entry in scores.values())
+
+    def build_vertebra_details(
+        self,
+        prediction: dict[str, Any],
+        n_slices: int,
+    ) -> list[dict[str, Any]]:
+        """Construit les détails par vertèbre avec localisation et bounding box (Modèle 2 si dispo)."""
+        details: list[dict[str, Any]] = []
+        scores_par_coupe = prediction["scores_par_coupe"]
+        resultats_localisation: dict[int, dict[str, Any]] = prediction.get(
+            "resultats_localisation",
+            {},
+        )
+        resultats_vertebre: dict[int, str] = prediction.get("resultats_vertebre", {})
+
+        for vertebre in VERTEBRES:
+            prob = float(prediction["scores_par_vertebre"].get(vertebre, 0.0))
+            segment_idx = VERTEBRES.index(vertebre)
+            coupe_ref = int((segment_idx + 0.5) / 7 * max(n_slices - 1, 0))
+            bbox_x, bbox_y, bbox_w, bbox_h = 0.35 + segment_idx * 0.03, 0.25, 0.18, 0.22
+
+            best_slice_for_vertebra: int | None = None
+            best_score = -1.0
+            for slice_idx, score in scores_par_coupe:
+                if self._slice_to_vertebra(slice_idx, n_slices) == vertebre and score >= prob - 0.01:
+                    coupe_ref = slice_idx
+                if (
+                    resultats_vertebre.get(slice_idx) == vertebre
+                    and slice_idx in resultats_localisation
+                    and score > best_score
+                ):
+                    best_score = score
+                    best_slice_for_vertebra = slice_idx
+
+            if best_slice_for_vertebra is None:
+                for slice_idx, score in scores_par_coupe:
+                    if (
+                        resultats_vertebre.get(slice_idx) == vertebre
+                        and slice_idx in resultats_localisation
+                        and score > best_score
+                    ):
+                        best_score = score
+                        best_slice_for_vertebra = slice_idx
+
+            if best_slice_for_vertebra is not None:
+                loc = resultats_localisation[best_slice_for_vertebra]
+                bbox_x, bbox_y, bbox_w, bbox_h = self._normalize_bbox(loc["bbox"])
+                coupe_ref = best_slice_for_vertebra
+
+            details.append(
+                {
+                    "vertebre": vertebre,
+                    "probabilite": prob,
+                    "localisation": LOCALISATIONS.get(vertebre, "Région vertébrale"),
+                    "bounding_box_x": bbox_x,
+                    "bounding_box_y": bbox_y,
+                    "bounding_box_w": bbox_w,
+                    "bounding_box_h": bbox_h,
                     "coupe_reference": coupe_ref,
                 }
             )
@@ -272,7 +624,7 @@ class PipelineAIService:
         vertebra_id: str | None = None,
     ) -> np.ndarray:
         """Grad-CAM — heatmap réelle si modèle chargé, sinon estimation anatomique."""
-        if not self.use_mock and self.model is not None:
+        if not self.use_mock and self.model_1 is not None:
             try:
                 return self._gradcam_pytorch(volume, slice_idx)
             except Exception:
@@ -348,9 +700,9 @@ class PipelineAIService:
         """Grad-CAM via model.features.norm5 (DenseNet-121)."""
         import torch
 
-        assert self.model is not None
+        assert self.model_1 is not None
 
-        tensor_input = self.load_25d_slice(volume, slice_idx)
+        tensor_input = self.build_25d_stack(volume, slice_idx)
         input_tensor = torch.from_numpy(tensor_input).unsqueeze(0).to(self.device)
         input_tensor.requires_grad_(True)
 
@@ -360,11 +712,11 @@ class PipelineAIService:
             nonlocal features
             features = output
 
-        handle = self.model.features.norm5.register_forward_hook(hook)
+        handle = self.model_1.features.norm5.register_forward_hook(hook)
         try:
-            output = self.model(input_tensor)
+            output = self.model_1(input_tensor)
             score = torch.sigmoid(output).squeeze()
-            self.model.zero_grad()
+            self.model_1.zero_grad()
             score.backward(retain_graph=True)
 
             if features is None:

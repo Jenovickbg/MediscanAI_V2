@@ -8,35 +8,53 @@ from app.models.utilisateur import Utilisateur
 from app.schemas.analyse import (
     AnalyseStartResponse,
     AnalyseStatusSchema,
+    BoundingBoxSchema,
     ResultatAnalyseSchema,
-    ScoreVertebreSchema,
+    VertebreResultatSchema,
 )
 from app.services.analyse_service import analyse_service
 from app.services.analyse_task_store import AnalyseStatus, analyse_task_store
 from app.services.examen_service import ExamenService
+from app.services.triage_config import classifier_triage, load_triage_thresholds
 
 router = APIRouter(prefix="/analyse", tags=["analyse"])
 examen_service = ExamenService()
 
+BBOX_PIXEL_SIZE = 512
+
+
+def _bbox_to_pixels(score) -> BoundingBoxSchema | None:
+    if score.bounding_box_w <= 0 and score.bounding_box_h <= 0:
+        return None
+    return BoundingBoxSchema(
+        x=int(round(score.bounding_box_x * BBOX_PIXEL_SIZE)),
+        y=int(round(score.bounding_box_y * BBOX_PIXEL_SIZE)),
+        w=int(round(score.bounding_box_w * BBOX_PIXEL_SIZE)),
+        h=int(round(score.bounding_box_h * BBOX_PIXEL_SIZE)),
+    )
+
 
 def _to_schema(resultat: ResultatAnalyse) -> ResultatAnalyseSchema:
+    thresholds = load_triage_thresholds()
+    scores_par_vertebre: dict[str, VertebreResultatSchema] = {}
+
+    for score in resultat.scores_vertebres:
+        niveau = score.niveau_risque or classifier_triage(score.probabilite, thresholds)
+        if niveau == "normal" and score.probabilite < thresholds.seuil_bas:
+            continue
+
+        scores_par_vertebre[score.vertebre] = VertebreResultatSchema(
+            probabilite=score.probabilite,
+            bounding_box=_bbox_to_pixels(score),
+            coupe_reference=score.coupe_reference,
+            niveau_risque=niveau,
+        )
+
     return ResultatAnalyseSchema(
         study_id=resultat.study_instance_uid,
         score_global=resultat.score_global,
         fracture_detectee=resultat.fracture_detectee,
-        scores_vertebres=[
-            ScoreVertebreSchema(
-                vertebre=s.vertebre,
-                probabilite=s.probabilite,
-                localisation=s.localisation,
-                bounding_box_x=s.bounding_box_x,
-                bounding_box_y=s.bounding_box_y,
-                bounding_box_w=s.bounding_box_w,
-                bounding_box_h=s.bounding_box_h,
-                coupe_reference=s.coupe_reference,
-            )
-            for s in resultat.scores_vertebres
-        ],
+        scores_par_vertebre=scores_par_vertebre,
         rapport_clinique=resultat.rapport_clinique,
         date_analyse=resultat.date_analyse,
         duree_analyse_sec=resultat.duree_analyse_sec,

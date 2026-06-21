@@ -3,6 +3,19 @@ from fastapi.testclient import TestClient
 from tests.conftest import wait_for_analysis
 
 
+def test_get_coupe_info_returns_dimensions(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    demo_study_id: str,
+):
+    response = client.get(f"/api/images/{demo_study_id}/coupes", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["nb_coupes"] > 0
+    assert "width" in data
+    assert "height" in data
+
+
 def test_get_coupe_image_png(
     client: TestClient,
     auth_headers: dict[str, str],

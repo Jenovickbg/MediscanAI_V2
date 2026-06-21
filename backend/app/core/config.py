@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
-    MODEL_PATH: str = "model/final_best_densenet121_25d.pth"
+    MODEL_PATH: str = "model/model1_classifier_densenet121.pth"
+    MODEL_1_PATH: str = "model/model1_classifier_densenet121.pth"
+    MODEL_2_PATH: str = "model/model2_fasterrcnn.pth"
+    MODEL_3_PATH: str = "model/model3_vertebre_densenet121.pth"
+    TRIAGE_THRESHOLDS_PATH: str = "config/triage_thresholds.json"
     DATA_DIR: Path = BACKEND_DIR.parent / "data"
     CACHE_DIR: Path = BACKEND_DIR / "cache"
     UPLOAD_DIR: Path = BACKEND_DIR.parent / "data" / "uploads"
@@ -41,3 +45,4 @@ settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 settings.SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
 settings.TEMP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 settings.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+(BACKEND_DIR / "config").mkdir(parents=True, exist_ok=True)

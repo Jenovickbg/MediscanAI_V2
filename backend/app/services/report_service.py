@@ -18,8 +18,13 @@ from app.models.resultat import ResultatAnalyse, VERTEBRES
 from app.services.examen_service import ExamenService
 from app.services.pipeline_service import pipeline_service
 
+from app.services.triage_config import (
+    is_vertebra_at_risk,
+    niveau_risque_label,
+    resolve_niveau_risque,
+)
+
 INSTITUTION_NAME = "Centre Hospitalier Universitaire — Kinshasa"
-SUSPICION_THRESHOLD = 0.30
 
 
 class ReportService:
@@ -179,7 +184,9 @@ class ReportService:
                 [
                     vertebre,
                     f"{score.probabilite * 100:.1f} %",
-                    self._status_label(score.probabilite),
+                    niveau_risque_label(
+                        resolve_niveau_risque(score.probabilite, score.niveau_risque)
+                    ),
                     score.localisation,
                 ]
             )
@@ -259,20 +266,17 @@ class ReportService:
         return elements
 
     def _reference_vertebrae(self, resultat: ResultatAnalyse) -> list[Any]:
-        at_risk = [s for s in resultat.scores_vertebres if s.probabilite >= SUSPICION_THRESHOLD]
+        at_risk = [
+            s
+            for s in resultat.scores_vertebres
+            if is_vertebra_at_risk(s.probabilite, s.niveau_risque)
+        ]
         at_risk.sort(key=lambda s: s.probabilite, reverse=True)
         if at_risk:
             return at_risk[:3]
         if resultat.scores_vertebres:
             return [max(resultat.scores_vertebres, key=lambda s: s.probabilite)]
         return []
-
-    def _status_label(self, probability: float) -> str:
-        if probability >= 0.60:
-            return "Fracture suspectée"
-        if probability >= 0.30:
-            return "Surveillance"
-        return "Normal"
 
 
 report_service = ReportService()

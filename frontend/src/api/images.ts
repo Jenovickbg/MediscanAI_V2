@@ -3,6 +3,8 @@ import { apiClient } from './client'
 export interface CoupeInfo {
   nb_coupes: number
   coupe_centrale: number
+  width: number
+  height: number
 }
 
 export async function fetchCoupeInfo(studyId: string): Promise<CoupeInfo> {
@@ -56,4 +58,21 @@ export function getSliceImageUrl(
     window_width: String(windowWidth),
   })
   return `/api/images/${studyId}/coupe/${sliceNumber}?${params.toString()}`
+}
+
+export async function fetchMprBlob(
+  studyId: string,
+  view: 'axial' | 'sagittal' | 'coronal',
+  index: number,
+  windowCenter = 300,
+  windowWidth = 1500,
+): Promise<Blob> {
+  const { data } = await apiClient.get<Blob>(`/images/${studyId}/mpr/${view}/${index}`, {
+    params: {
+      window_center: windowCenter,
+      window_width: windowWidth,
+    },
+    responseType: 'blob',
+  })
+  return data
 }

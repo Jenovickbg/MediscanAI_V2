@@ -32,7 +32,7 @@ def test_analysis_pipeline_produces_results(
     data = results.json()
 
     assert data["study_id"] == demo_study_id
-    assert len(data["scores_vertebres"]) == 7
+    assert "scores_par_vertebre" in data
     assert data["rapport_clinique"]
     assert data["mode_mock"] is True
     assert 0.0 <= data["score_global"] <= 1.0

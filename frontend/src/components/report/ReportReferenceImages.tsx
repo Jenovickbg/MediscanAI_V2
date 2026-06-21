@@ -5,7 +5,6 @@ import { fetchGradCamBlob, fetchSliceBlob } from '../../api/images'
 import type { ScoreVertebre } from '../../types/analyse'
 import { LoadingSpinner } from '../ui'
 
-const SUSPICION_THRESHOLD = 0.30
 const MAX_IMAGES = 3
 
 interface ReportReferenceImagesProps {
@@ -15,7 +14,7 @@ interface ReportReferenceImagesProps {
 
 function pickReferenceScores(scores: ScoreVertebre[]): ScoreVertebre[] {
   const atRisk = scores
-    .filter((s) => s.probabilite >= SUSPICION_THRESHOLD)
+    .filter((s) => s.niveau_risque === 'eleve' || s.niveau_risque === 'incertain')
     .sort((a, b) => b.probabilite - a.probabilite)
 
   if (atRisk.length > 0) return atRisk.slice(0, MAX_IMAGES)

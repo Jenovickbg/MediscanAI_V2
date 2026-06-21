@@ -33,14 +33,15 @@ class AnalyseService:
             volume, _ = self.dicom_service.load_volume_from_study(examen.dicom_path)
             analyse_task_store.update(study_id, progress=35)
 
-            prediction = pipeline_service.predict_volume(volume, study_id=study_id)
+            analyse = pipeline_service.analyser_examen(volume, study_id=study_id)
             analyse_task_store.update(study_id, progress=75)
 
-            details = pipeline_service.build_vertebra_details(prediction, volume.shape[0])
-            rapport = pipeline_service.generate_clinical_report(
-                prediction["scores_par_vertebre"],
-                prediction["fracture_detectee"],
+            details = pipeline_service.build_vertebra_details_from_analyse(
+                analyse,
+                volume.shape[0],
             )
+            rapport = analyse["rapport_clinique"]
+            score_global = pipeline_service.score_global_from_analyse(analyse)
 
             existing = (
                 db.query(ResultatAnalyse)
@@ -54,13 +55,13 @@ class AnalyseService:
             duree = time.perf_counter() - start
             resultat = ResultatAnalyse(
                 study_instance_uid=study_id,
-                fracture_detectee=prediction["fracture_detectee"],
-                score_global=prediction["score_global"],
+                fracture_detectee=analyse["fracture_detectee"],
+                score_global=score_global,
                 rapport_clinique=rapport,
                 date_analyse=datetime.now(timezone.utc),
                 duree_analyse_sec=duree,
                 seuil_utilise=pipeline_service.threshold,
-                mode_mock=prediction.get("mode_mock", False),
+                mode_mock=analyse.get("mode_mock", False),
             )
             db.add(resultat)
             db.flush()
@@ -77,6 +78,7 @@ class AnalyseService:
                         bounding_box_w=detail["bounding_box_w"],
                         bounding_box_h=detail["bounding_box_h"],
                         coupe_reference=detail["coupe_reference"],
+                        niveau_risque=detail.get("niveau_risque"),
                     )
                 )
 

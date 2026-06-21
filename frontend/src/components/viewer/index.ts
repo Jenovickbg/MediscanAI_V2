@@ -1,6 +1,7 @@
 export { AxialViewer } from './AxialViewer'
 export { GradCamOverlay } from './GradCamOverlay'
 export { GradCamToggle } from './GradCamToggle'
+export { MprViewer } from './MprViewer'
 export { SpineViewer3D } from './SpineViewer3D'
 export { VertebraDetailPanel } from './VertebraDetailPanel'
 export { VertebraGradCamThumbnail } from './VertebraGradCamThumbnail'

@@ -1,24 +1,29 @@
+from __future__ import annotations
+
 from datetime import datetime
 
 from pydantic import BaseModel, Field
 
 
-class ScoreVertebreSchema(BaseModel):
-    vertebre: str
+class BoundingBoxSchema(BaseModel):
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+class VertebreResultatSchema(BaseModel):
     probabilite: float
-    localisation: str
-    bounding_box_x: float
-    bounding_box_y: float
-    bounding_box_w: float
-    bounding_box_h: float
+    bounding_box: BoundingBoxSchema | None = None
     coupe_reference: int
+    niveau_risque: str
 
 
 class ResultatAnalyseSchema(BaseModel):
     study_id: str
     score_global: float
     fracture_detectee: bool
-    scores_vertebres: list[ScoreVertebreSchema]
+    scores_par_vertebre: dict[str, VertebreResultatSchema]
     rapport_clinique: str
     date_analyse: datetime
     duree_analyse_sec: float

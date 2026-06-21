@@ -1,6 +1,7 @@
 import type { ResultatAnalyse } from '../../types/analyse'
 import type { Examen } from '../../types/examen'
 import { VERTEBRAE } from '../../store/viewerStore'
+import { expandVertebraScores, niveauLabel } from '../../utils/analyseScores'
 import { ReportReferenceImages } from './ReportReferenceImages'
 
 export const INSTITUTION_NAME = 'Centre Hospitalier Universitaire — Kinshasa'
@@ -15,15 +16,9 @@ function formatDateTime(iso: string): string {
   }).format(new Date(iso))
 }
 
-function statusLabel(probability: number): string {
-  if (probability >= 0.6) return 'Fracture suspectée'
-  if (probability >= 0.3) return 'Surveillance'
-  return 'Normal'
-}
-
-function statusClass(probability: number): string {
-  if (probability >= 0.6) return 'text-red-700'
-  if (probability >= 0.3) return 'text-amber-700'
+function statusClass(niveau: string): string {
+  if (niveau === 'eleve') return 'text-red-700'
+  if (niveau === 'incertain') return 'text-amber-700'
   return 'text-emerald-700'
 }
 
@@ -34,7 +29,7 @@ interface ClinicalReportContentProps {
 
 export function ClinicalReportContent({ examen, result }: ClinicalReportContentProps) {
   const scoresByVertebra = Object.fromEntries(
-    result.scores_vertebres.map((s) => [s.vertebre, s]),
+    expandVertebraScores(result).map((s) => [s.vertebre, s]),
   )
   const examDate = examen.date_examen ?? examen.uploaded_at
 
@@ -133,8 +128,8 @@ export function ClinicalReportContent({ examen, result }: ClinicalReportContentP
                     <td className="px-4 py-2 font-mono">
                       {score ? `${(score.probabilite * 100).toFixed(1)} %` : '—'}
                     </td>
-                    <td className={`px-4 py-2 font-medium ${score ? statusClass(score.probabilite) : ''}`}>
-                      {score ? statusLabel(score.probabilite) : '—'}
+                    <td className={`px-4 py-2 font-medium ${score ? statusClass(score.niveau_risque) : ''}`}>
+                      {score ? niveauLabel(score.niveau_risque) : '—'}
                     </td>
                     <td className="px-4 py-2 text-gray-700">
                       {score?.localisation ?? '—'}
@@ -154,7 +149,10 @@ export function ClinicalReportContent({ examen, result }: ClinicalReportContentP
         </pre>
       </section>
 
-      <ReportReferenceImages studyId={examen.study_instance_uid} scores={result.scores_vertebres} />
+      <ReportReferenceImages
+        studyId={examen.study_instance_uid}
+        scores={expandVertebraScores(result)}
+      />
 
       <footer className="mt-10 border-t border-gray-300 pt-4 text-xs text-gray-500">
         Rapport généré par MediScanAI v1.0 — {formatDateTime(new Date().toISOString())} — À valider

@@ -7,6 +7,7 @@ import { downloadReportPdf, triggerPdfDownload } from '../../api/report'
 import type { ScoreVertebre } from '../../types/analyse'
 import { useViewerStore, type VertebraId } from '../../store/viewerStore'
 import { cn } from '../../utils/cn'
+import { niveauLabel, niveauToRiskLevel } from '../../utils/analyseScores'
 import { Button, ProgressBar } from '../ui'
 
 interface VertebraScorePanelProps {
@@ -16,21 +17,15 @@ interface VertebraScorePanelProps {
   fractureDetectee?: boolean
 }
 
-function riskLevel(probability: number): 'low' | 'medium' | 'high' {
-  if (probability >= 0.6) return 'high'
-  if (probability >= 0.3) return 'medium'
-  return 'low'
-}
-
-function RiskIcon({ probability }: { probability: number }) {
-  const level = riskLevel(probability)
+function RiskIcon({ niveau }: { niveau: ScoreVertebre['niveau_risque'] }) {
+  const level = niveauToRiskLevel(niveau)
   if (level === 'high') {
     return <AlertTriangle className="h-3 w-3 text-danger" aria-label="Risque élevé" />
   }
   if (level === 'medium') {
-    return <AlertTriangle className="h-3 w-3 text-warning" aria-label="Risque modéré" />
+    return <AlertTriangle className="h-3 w-3 text-warning" aria-label="Risque incertain" />
   }
-  return <Circle className="h-2 w-2 fill-safe text-safe" aria-label="Risque faible" />
+  return <Circle className="h-2 w-2 fill-safe text-safe" aria-label="Normal" />
 }
 
 export function VertebraScorePanel({
@@ -92,6 +87,7 @@ export function VertebraScorePanel({
           {orderedScores.map((score) => {
             const isSelected = selectedVertebra === score.vertebre
             const pct = score.probabilite * 100
+            const riskLevel = niveauToRiskLevel(score.niveau_risque)
 
             return (
               <li key={score.vertebre}>
@@ -117,15 +113,18 @@ export function VertebraScorePanel({
                   <div className="mb-1.5 flex items-center justify-between gap-2">
                     <span className="flex items-center gap-2 text-sm font-medium text-text-primary">
                       {score.vertebre}
-                      <RiskIcon probability={score.probabilite} />
+                      <RiskIcon niveau={score.niveau_risque} />
                     </span>
                     <span className="font-mono text-xs text-text-secondary">
                       {pct.toFixed(0)}%
                     </span>
                   </div>
+                  <p className="mb-1.5 text-[10px] uppercase tracking-wide text-text-muted">
+                    {niveauLabel(score.niveau_risque)}
+                  </p>
                   <ProgressBar
                     value={pct}
-                    riskLevel={riskLevel(score.probabilite)}
+                    riskLevel={riskLevel}
                   />
                 </motion.button>
               </li>
