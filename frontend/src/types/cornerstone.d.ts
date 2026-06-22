@@ -1,21 +1,5 @@
 declare module 'cornerstone-core' {
-  const cornerstone: CornerstoneCore
-  export default cornerstone
-
-  interface CornerstoneCore {
-    enable(element: HTMLElement): void
-    disable(element: HTMLElement): void
-    resize(element: HTMLElement, fitToWindow?: boolean): void
-    loadImage(imageId: string): Promise<CornerstoneImage>
-    displayImage(element: HTMLElement, image: CornerstoneImage): void
-    getEnabledElement(element: HTMLElement): { image?: CornerstoneImage }
-    registerImageLoader(
-      scheme: string,
-      loader: (imageId: string) => { promise: Promise<CornerstoneImage> },
-    ): void
-  }
-
-  interface CornerstoneImage {
+  export interface CornerstoneImage {
     imageId: string
     minPixelValue: number
     maxPixelValue: number
@@ -33,6 +17,22 @@ declare module 'cornerstone-core' {
     sizeInBytes: number
     getPixelData(): Uint8Array | Int16Array | Float32Array
   }
+
+  const cornerstone: CornerstoneCore
+  export default cornerstone
+
+  interface CornerstoneCore {
+    enable(element: HTMLElement): void
+    disable(element: HTMLElement): void
+    resize(element: HTMLElement, fitToWindow?: boolean): void
+    loadImage(imageId: string): Promise<CornerstoneImage>
+    displayImage(element: HTMLElement, image: CornerstoneImage): void
+    getEnabledElement(element: HTMLElement): { image?: CornerstoneImage }
+    registerImageLoader(
+      scheme: string,
+      loader: (imageId: string) => { promise: Promise<CornerstoneImage> },
+    ): void
+  }
 }
 
 declare module 'cornerstone-math' {
@@ -41,10 +41,16 @@ declare module 'cornerstone-math' {
 }
 
 declare module 'cornerstone-web-image-loader' {
+  import type { CornerstoneImage } from 'cornerstone-core'
+
   interface WebImageLoader {
     external: {
       cornerstone: unknown
     }
+    configure(options: { beforeSend?: (xhr: XMLHttpRequest) => void }): void
+    loadImage(imageId: string): { promise: Promise<CornerstoneImage> }
+    arrayBufferToImage(arrayBuffer: ArrayBuffer): Promise<HTMLImageElement>
+    createImage(image: HTMLImageElement, imageId: string): CornerstoneImage
   }
   const loader: WebImageLoader
   export default loader

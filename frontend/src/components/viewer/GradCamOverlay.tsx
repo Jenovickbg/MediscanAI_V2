@@ -72,7 +72,7 @@ export function GradCamOverlay({
             <img
               src={blobUrl}
               alt=""
-              className="h-full w-full object-contain"
+              className="h-full w-full max-h-full max-w-full object-contain"
               style={{
                 mixBlendMode: 'screen',
                 opacity: opacity / 100,

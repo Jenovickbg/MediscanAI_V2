@@ -5,6 +5,7 @@ import { Layers, RotateCcw } from 'lucide-react'
 import { fetchCoupeInfo, fetchMprBlob } from '../../api/images'
 import { cn } from '../../utils/cn'
 import { Button, LoadingSpinner } from '../ui'
+import { VIEWER_FRAME_CLASS, VIEWER_IMAGE_CENTER_CLASS } from './viewerLayout'
 
 type MprView = 'sagittal' | 'coronal'
 
@@ -102,19 +103,19 @@ export function MprViewer({ studyId, view, className }: MprViewerProps) {
 
       <div className="flex gap-3">
         <div className="relative min-w-0 flex-1 overflow-hidden rounded-xl border border-border bg-black">
-          {imageUrl && !loadingSlice && (
-            <img
-              src={imageUrl}
-              alt={`Coupe ${VIEW_LABELS[view]} ${sliceIndex + 1}`}
-              className="h-[min(70vh,640px)] w-full object-contain"
-            />
-          )}
+          <div className={VIEWER_FRAME_CLASS}>
+            <div className={VIEWER_IMAGE_CENTER_CLASS}>
+              {imageUrl && !loadingSlice && (
+                <img
+                  src={imageUrl}
+                  alt={`Coupe ${VIEW_LABELS[view]} ${sliceIndex + 1}`}
+                  className="max-h-full max-w-full object-contain"
+                />
+              )}
 
-          {loadingSlice && (
-            <div className="flex h-[min(70vh,640px)] items-center justify-center">
-              <LoadingSpinner size="md" />
+              {loadingSlice && <LoadingSpinner size="md" />}
             </div>
-          )}
+          </div>
 
           {viewerError && (
             <div className="absolute inset-0 flex items-center justify-center bg-bg-primary/80">

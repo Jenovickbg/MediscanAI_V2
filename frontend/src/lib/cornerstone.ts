@@ -1,4 +1,5 @@
 import cornerstone from 'cornerstone-core'
+import type { CornerstoneImage } from 'cornerstone-core'
 import cornerstoneMath from 'cornerstone-math'
 import cornerstoneTools from 'cornerstone-tools'
 import cornerstoneWebImageLoader from 'cornerstone-web-image-loader'
@@ -9,6 +10,8 @@ export function initCornerstone(): void {
   if (initialized) return
 
   cornerstoneWebImageLoader.external.cornerstone = cornerstone
+  cornerstoneWebImageLoader.configure({})
+  cornerstone.registerImageLoader('blob', cornerstoneWebImageLoader.loadImage)
   cornerstoneTools.external.cornerstone = cornerstone
   cornerstoneTools.external.cornerstoneMath = cornerstoneMath
 
@@ -31,4 +34,13 @@ export function activateViewerTools(element: HTMLElement): void {
   cornerstoneTools.setToolActiveForElement(element, 'ZoomMouseWheel', { mouseButtonMask: 1 })
 }
 
-export { cornerstone, cornerstoneTools }
+export async function loadPngBlobAsCornerstoneImage(
+  blob: Blob,
+  imageId: string,
+): Promise<CornerstoneImage> {
+  const arrayBuffer = await blob.arrayBuffer()
+  const htmlImage = await cornerstoneWebImageLoader.arrayBufferToImage(arrayBuffer)
+  return cornerstoneWebImageLoader.createImage(htmlImage, imageId)
+}
+
+export { cornerstone, cornerstoneTools, cornerstoneWebImageLoader }

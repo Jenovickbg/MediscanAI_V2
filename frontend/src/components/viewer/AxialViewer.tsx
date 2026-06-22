@@ -3,12 +3,18 @@ import { useQuery } from '@tanstack/react-query'
 import { Layers, RotateCcw } from 'lucide-react'
 
 import { fetchCoupeInfo, fetchSliceBlob } from '../../api/images'
-import { activateViewerTools, cornerstone, initCornerstone } from '../../lib/cornerstone'
+import {
+  activateViewerTools,
+  cornerstone,
+  initCornerstone,
+  loadPngBlobAsCornerstoneImage,
+} from '../../lib/cornerstone'
 import { useViewerStore } from '../../store/viewerStore'
 import { cn } from '../../utils/cn'
 import { Button, LoadingSpinner, Slider } from '../ui'
 import { GradCamOverlay } from './GradCamOverlay'
 import { GradCamToggle } from './GradCamToggle'
+import { VIEWER_FRAME_CLASS, VIEWER_INNER_CLASS } from './viewerLayout'
 
 interface AxialViewerProps {
   studyId: string
@@ -17,7 +23,6 @@ interface AxialViewerProps {
 
 export function AxialViewer({ studyId, className }: AxialViewerProps) {
   const elementRef = useRef<HTMLDivElement>(null)
-  const blobUrlRef = useRef<string | null>(null)
   const [sliceIndex, setSliceIndex] = useState(0)
   const [loadingSlice, setLoadingSlice] = useState(true)
   const [viewerError, setViewerError] = useState<string | null>(null)
@@ -49,13 +54,6 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
     clearTargetSlice()
   }, [targetSliceIndex, coupeInfo, clearTargetSlice])
 
-  const revokeBlobUrl = useCallback(() => {
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current)
-      blobUrlRef.current = null
-    }
-  }, [])
-
   const loadSlice = useCallback(
     async (index: number) => {
       const element = elementRef.current
@@ -68,12 +66,11 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
         initCornerstone()
         cornerstone.enable(element)
 
-        revokeBlobUrl()
         const blob = await fetchSliceBlob(studyId, index, 'axial')
-        const blobUrl = URL.createObjectURL(blob)
-        blobUrlRef.current = blobUrl
-
-        const image = await cornerstone.loadImage(blobUrl)
+        const image = await loadPngBlobAsCornerstoneImage(
+          blob,
+          `mediscan-${studyId}-axial-${index}`,
+        )
         cornerstone.displayImage(element, image)
         cornerstone.resize(element, true)
 
@@ -87,7 +84,7 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
         setLoadingSlice(false)
       }
     },
-    [coupeInfo, revokeBlobUrl, studyId],
+    [coupeInfo, studyId],
   )
 
   useEffect(() => {
@@ -114,7 +111,6 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
   useEffect(() => {
     const element = elementRef.current
     return () => {
-      revokeBlobUrl()
       if (element) {
         try {
           cornerstone.disable(element)
@@ -124,7 +120,7 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
       }
       toolsReadyRef.current = false
     }
-  }, [revokeBlobUrl])
+  }, [])
 
   const handleReset = () => {
     void loadSlice(sliceIndex)
@@ -184,19 +180,24 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
 
       <div className="flex gap-3">
         <div className="relative min-w-0 flex-1 overflow-hidden rounded-xl border border-border bg-black">
-          <div
-            ref={elementRef}
-            className="h-[min(70vh,640px)] w-full cursor-crosshair"
-            onContextMenu={(e) => e.preventDefault()}
-          />
+          <div className={VIEWER_FRAME_CLASS}>
+            <div className={VIEWER_INNER_CLASS}>
+              <div
+                ref={elementRef}
+                className="absolute inset-0 cursor-crosshair"
+                onContextMenu={(e) => e.preventDefault()}
+              />
 
-          <GradCamOverlay
-            studyId={studyId}
-            sliceNumber={sliceIndex}
-            vertebraId={selectedVertebra ?? undefined}
-            active={gradCamActive}
-            opacity={gradCamOpacity}
-          />
+              <GradCamOverlay
+                studyId={studyId}
+                sliceNumber={sliceIndex}
+                vertebraId={selectedVertebra ?? undefined}
+                active={gradCamActive}
+                opacity={gradCamOpacity}
+                className="absolute inset-0"
+              />
+            </div>
+          </div>
 
           {loadingSlice && (
             <div className="absolute inset-0 flex items-center justify-center bg-bg-primary/60">

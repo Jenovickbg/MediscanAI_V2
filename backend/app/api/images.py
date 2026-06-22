@@ -52,25 +52,19 @@ def get_coupe_image(
     db: Session = Depends(get_db),
     current_user: Utilisateur = Depends(get_current_user),
 ) -> Response:
-    from pathlib import Path
-
     examen = examen_service.get_examen_by_study_id(db, study_id)
     if examen is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Examen introuvable")
 
-    study_path = Path(examen.dicom_path)
     try:
-        if list(study_path.glob("*.png")):
-            png_bytes = examen_service.render_preview_png(study_path, numero)
-        else:
-            volume, _ = examen_service.dicom_service.load_and_sort_slices(examen.dicom_path)
-            png_bytes = examen_service.dicom_service.render_slice_to_image(
-                volume,
-                numero,
-                view,
-                wc=window_center,
-                ww=window_width,
-            )
+        volume, _ = examen_service.dicom_service.get_cached_volume(examen.dicom_path)
+        png_bytes = examen_service.dicom_service.render_slice_to_image(
+            volume,
+            numero,
+            view,
+            wc=window_center,
+            ww=window_width,
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
