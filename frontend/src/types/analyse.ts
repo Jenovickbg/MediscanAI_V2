@@ -12,6 +12,7 @@ export interface VertebreResultat {
   bounding_box?: BoundingBox | null
   coupe_reference: number
   niveau_risque: NiveauRisque
+  confiance_vertebre?: number | null
 }
 
 /** Vue aplatie C1–C7 pour les panneaux UI (dérivée de scores_par_vertebre). */
@@ -19,6 +20,7 @@ export interface ScoreVertebre {
   vertebre: string
   probabilite: number
   niveau_risque: NiveauRisque
+  confiance_vertebre?: number | null
   localisation: string
   bounding_box_x: number
   bounding_box_y: number

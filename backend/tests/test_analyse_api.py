@@ -66,3 +66,41 @@ def test_reanalysis_is_idempotent(
 
     results = client.get(f"/api/analyse/{demo_study_id}/resultats", headers=auth_headers)
     assert results.status_code == 200
+
+
+def test_results_schema_tolerates_nan_bbox():
+    from datetime import datetime, timezone
+
+    from app.api.analyse import _to_schema
+    from app.models.resultat import ResultatAnalyse, ScoreVertebre
+
+    resultat = ResultatAnalyse(
+        study_instance_uid="NAN-STUDY",
+        fracture_detectee=True,
+        score_global=0.5,
+        rapport_clinique="Test",
+        date_analyse=datetime.now(timezone.utc),
+        duree_analyse_sec=1.0,
+        seuil_utilise=0.15,
+        mode_mock=False,
+    )
+    resultat.score_global = float("nan")
+    resultat.scores_vertebres = [
+        ScoreVertebre(
+            resultat_id=1,
+            vertebre="C5",
+            probabilite=float("nan"),
+            localisation="Test",
+            bounding_box_x=float("nan"),
+            bounding_box_y=0.1,
+            bounding_box_w=0.2,
+            bounding_box_h=0.2,
+            coupe_reference=10,
+            niveau_risque="eleve",
+        )
+    ]
+
+    schema = _to_schema(resultat)
+    assert schema.score_global == 0.0
+    assert schema.scores_par_vertebre["C5"].probabilite == 0.0
+    assert schema.scores_par_vertebre["C5"].bounding_box is None

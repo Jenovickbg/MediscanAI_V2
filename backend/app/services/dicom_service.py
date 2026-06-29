@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime
+from datetime import datetime, timezone, timezone
 from pathlib import Path
 from typing import Any
 
@@ -190,7 +190,9 @@ class DicomService:
                     time_part = "000000"
                     if study_time:
                         time_part = str(study_time).split(".")[0][:6].ljust(6, "0")
-                    date_examen = datetime.strptime(f"{study_date}{time_part}", "%Y%m%d%H%M%S")
+                    date_examen = datetime.strptime(f"{study_date}{time_part}", "%Y%m%d%H%M%S").replace(
+                        tzinfo=timezone.utc
+                    )
                 if hasattr(ds, "PixelSpacing") and ds.PixelSpacing is not None:
                     pixel_spacing = [float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1])]
                 slice_thickness = float(getattr(ds, "SliceThickness", 1.0))

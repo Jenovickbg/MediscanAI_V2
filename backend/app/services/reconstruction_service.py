@@ -1,32 +1,41 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.ndimage import gaussian_filter
-from skimage.measure import marching_cubes
+import pydicom
+from scipy.ndimage import gaussian_filter, zoom
+from skimage.measure import label as sklabel, marching_cubes
 
 from app.core.config import settings
 from app.models.resultat import VERTEBRES
+from app.utils.dicom_utils import is_dicom_file
 
 logger = logging.getLogger(__name__)
 
 MAX_TRIANGLES = 120_000
-MESH_CACHE_VERSION = "v2_hu"
+MESH_CACHE_VERSION = "v5_largest_component"
 BONE_THRESHOLD_HU = 200.0
-GAUSSIAN_SIGMA = 1.0
+GAUSSIAN_SIGMA = 1.5
+CLEAN_VOLUME_LEVEL = 100.0
+CLEAN_VOLUME_HU = 200.0
+CLEAN_GAUSSIAN_SIGMA = 1.0
+Z_CROP_START_RATIO = 0.20
+Z_CROP_END_RATIO = 0.65
+VERTS_DISPLAY_SCALE = 10.0
 
 
 class ReconstructionService:
-    """Reconstruction 3D géométrique — indépendante du pipeline IA."""
+    """Reconstruction 3D geometrique — independante du pipeline IA."""
 
     def get_or_build_mesh(
         self,
         study_id: str,
-        volume: np.ndarray,
-        spacing: dict[str, Any],
+        study_path: str,
         scores: dict[str, float] | None = None,
         niveaux_risque: dict[str, str] | None = None,
     ) -> dict[str, Any]:
@@ -34,11 +43,11 @@ class ReconstructionService:
         if cache_path.exists():
             return json.loads(cache_path.read_text(encoding="utf-8"))
 
-        mesh = self.build_mesh(volume, spacing)
+        mesh = self.build_mesh(study_path, study_id=study_id)
         scores = scores or {v: 0.1 for v in VERTEBRES}
         vertebra_indices = self.map_vertebrae_to_mesh(
             np.array(mesh["vertices"]),
-            spacing.get("slice_positions", []),
+            mesh.get("stats", {}).get("slice_positions", []),
         )
         mesh["vertex_colors"] = self.colorize_mesh(
             vertebra_indices,
@@ -58,134 +67,190 @@ class ReconstructionService:
         cache_path.write_text(json.dumps(mesh), encoding="utf-8")
         return mesh
 
+    @staticmethod
+    def clear_study_cache(study_id: str) -> None:
+        cache_path = settings.CACHE_DIR / f"mesh_{MESH_CACHE_VERSION}_{study_id}.json"
+        cache_path.unlink(missing_ok=True)
+        cache_key = hashlib.md5(f"{study_id}_{int(BONE_THRESHOLD_HU)}".encode()).hexdigest()
+        geom_path = settings.CACHE_DIR / f"mesh_geom_{cache_key}.json"
+        geom_path.unlink(missing_ok=True)
+
     def build_mesh(
         self,
-        volume: np.ndarray,
-        spacing: dict[str, Any],
+        study_path: str,
+        threshold_hu: float = BONE_THRESHOLD_HU,
+        study_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Reconstruction 3D avec espacement physique DICOM reel.
+        Charge les coupes depuis study_path, resampling isotropique, marching cubes.
+        """
+        cache_key_src = study_id or study_path
+        cache_key = hashlib.md5(f"{cache_key_src}_{int(threshold_hu)}".encode()).hexdigest()
+        cache_path = settings.CACHE_DIR / f"mesh_geom_{cache_key}.json"
+
+        if cache_path.exists():
+            logger.info("[Reconstruction] Cache trouvé pour %s", cache_key_src)
+            print(f"[Reconstruction] Cache trouvé pour {cache_key_src}")
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+
+        result = self._build_mesh_uncached(study_path, threshold_hu)
+        cache_path.write_text(json.dumps(result), encoding="utf-8")
+        return result
+
+    def _build_mesh_uncached(
+        self,
+        study_path: str,
         threshold_hu: float = BONE_THRESHOLD_HU,
     ) -> dict[str, Any]:
-        self._print_volume_diagnostics(volume, spacing)
+        path = Path(study_path)
+        dcm_files = [p for p in path.iterdir() if p.is_file() and is_dicom_file(p.name)]
 
-        if spacing.get("volume_kind") == "png_preview" or not self._is_hounsfield_volume(volume):
-            print(
-                "[Reconstruction][DIAG] Volume non-HU ou aperçu PNG — "
-                "maillage procédural cervical (pas de marching cubes sur bruit)"
-            )
+        if not dcm_files:
+            from app.services.dicom_service import DicomService
+
+            volume, spacing = DicomService().load_volume_from_study(str(path))
+            print("[Reconstruction][DIAG] Pas de DICOM - maillage procedural")
             return self._procedural_spine_mesh(volume, spacing)
 
         try:
-            return self._marching_cubes_mesh(volume, spacing, threshold_hu)
+            return self._build_mesh_from_dicom(path, int(threshold_hu))
         except Exception as exc:
-            logger.warning("Marching cubes échoué (%s) — maillage procédural", exc)
-            print(f"[Reconstruction][DIAG] Marching cubes échoué: {exc}")
+            logger.warning("Marching cubes echoue (%s) - maillage procedural", exc)
+            print(f"[Reconstruction][DIAG] Marching cubes echoue: {exc}")
+            from app.services.dicom_service import DicomService
+
+            volume, spacing = DicomService().load_volume_from_study(str(path))
             return self._procedural_spine_mesh(volume, spacing)
 
-    @staticmethod
-    def _print_volume_diagnostics(volume: np.ndarray, spacing: dict[str, Any]) -> None:
-        hu = volume.astype(np.float32)
-        print("[Reconstruction][DIAG] --- Volume avant reconstruction ---")
-        print(f"  shape={hu.shape}, dtype={volume.dtype}")
+    def _build_mesh_from_dicom(self, study_path: Path, threshold_hu: int = 200) -> dict[str, Any]:
+        slices: list[pydicom.Dataset] = []
+        for file_path in study_path.iterdir():
+            if not file_path.is_file() or not is_dicom_file(file_path.name):
+                continue
+            dcm = pydicom.dcmread(str(file_path), force=True)
+            if not hasattr(dcm, "pixel_array"):
+                continue
+            slices.append(dcm)
+
+        if not slices:
+            raise ValueError("Aucune coupe DICOM avec pixels dans cet examen")
+
+        slices.sort(key=lambda s: float(s.ImagePositionPatient[2]))
+
+        pixel_spacing = float(slices[0].PixelSpacing[0])
+        if len(slices) >= 2:
+            slice_thickness = abs(
+                float(slices[1].ImagePositionPatient[2]) - float(slices[0].ImagePositionPatient[2])
+            )
+        else:
+            slice_thickness = float(getattr(slices[0], "SliceThickness", 1.0) or 1.0)
+
+        if slice_thickness <= 0:
+            slice_thickness = float(getattr(slices[0], "SliceThickness", 1.0) or 1.0)
+
+        print(f"[Reconstruction][DIAG] PixelSpacing XY : {pixel_spacing:.3f} mm")
+        print(f"[Reconstruction][DIAG] SliceThickness Z : {slice_thickness:.3f} mm")
+        print(f"[Reconstruction][DIAG] Nombre de coupes : {len(slices)}")
+
+        volume_layers: list[np.ndarray] = []
+        for dcm in slices:
+            img = dcm.pixel_array.astype(np.float32)
+            slope = float(getattr(dcm, "RescaleSlope", 1) or 1)
+            intercept = float(getattr(dcm, "RescaleIntercept", 0) or 0)
+            volume_layers.append(img * slope + intercept)
+
+        volume = np.stack(volume_layers, axis=0)
+        print(f"[Reconstruction][DIAG] Volume shape avant resampling : {volume.shape}")
         print(
-            f"  min={float(hu.min()):.1f}, max={float(hu.max()):.1f}, "
-            f"mean={float(hu.mean()):.2f}"
-        )
-        print(
-            f"  p05={float(np.percentile(hu, 5)):.1f}, "
-            f"p50={float(np.percentile(hu, 50)):.1f}, "
-            f"p95={float(np.percentile(hu, 95)):.1f}"
-        )
-        print(f"  tri coupes: {spacing.get('sort_method', 'inconnu')}")
-        print(
-            f"  RescaleSlope/Intercept appliqués: "
-            f"{spacing.get('hu_rescale_applied', False)}"
-        )
-        print(
-            f"  spacing z/y/x=({spacing.get('slice_thickness')}, "
-            f"{spacing.get('pixel_spacing', [1, 1])[0]}, "
-            f"{spacing.get('pixel_spacing', [1, 1])[1]})"
+            f"[Reconstruction][DIAG] HU min: {float(volume.min()):.0f}, "
+            f"max: {float(volume.max()):.0f}"
         )
 
-    @staticmethod
-    def _is_hounsfield_volume(volume: np.ndarray) -> bool:
-        """CT valide : air ~ -1000 HU, os > +200 HU."""
-        hu = volume.astype(np.float32)
-        return float(hu.min()) < -100.0 and float(hu.max()) > 250.0
+        total = volume.shape[0]
+        debut = int(total * Z_CROP_START_RATIO)
+        fin = int(total * Z_CROP_END_RATIO)
+        fin = max(fin, debut + 1)
+        volume = volume[debut:fin, :, :]
+        print(f"[Reconstruction][DIAG] Volume apres rognage cervical : {volume.shape}")
 
-    def _marching_cubes_mesh(
-        self,
-        volume: np.ndarray,
-        spacing: dict[str, Any],
-        threshold_hu: float,
-    ) -> dict[str, Any]:
-        hu_volume = volume.astype(np.float32)
-        smoothed = gaussian_filter(hu_volume, sigma=GAUSSIAN_SIGMA)
+        zoom_z = slice_thickness / pixel_spacing
+        zoom_factors = (zoom_z / 2, 0.5, 0.5)
+        volume_resampled = zoom(volume, zoom_factors, order=1)
+        print(f"[Reconstruction][DIAG] Volume apres resampling : {volume_resampled.shape}")
+        print(f"[Reconstruction][DIAG] zoom_factors Z/2/2 : {zoom_factors}")
 
+        volume_smooth = gaussian_filter(volume_resampled, sigma=GAUSSIAN_SIGMA)
+
+        binary_volume = (volume_smooth > float(threshold_hu)).astype(np.uint8)
+        labeled = sklabel(binary_volume, connectivity=2)
+        component_sizes = np.bincount(labeled.ravel())
+        component_sizes[0] = 0
+
+        if component_sizes.max() == 0:
+            raise ValueError("Aucun voxel osseux apres seuillage")
+
+        largest_component = int(np.argmax(component_sizes))
+        removed_voxels = int(np.sum(binary_volume) - component_sizes[largest_component])
         print(
-            "[Reconstruction][DIAG] Après Gaussien sigma=1.0 — "
-            f"min={float(smoothed.min()):.1f}, max={float(smoothed.max()):.1f}, "
-            f"mean={float(smoothed.mean()):.2f}"
+            f"[Reconstruction][DIAG] Composante connexe max (label={largest_component}) - "
+            f"supprimes={removed_voxels} voxels parasites"
         )
 
-        pixel_spacing = spacing.get("pixel_spacing", [1.0, 1.0])
-        slice_thickness = float(spacing.get("slice_thickness", 1.0))
-        voxel_spacing = (slice_thickness, float(pixel_spacing[0]), float(pixel_spacing[1]))
-
-        level = float(threshold_hu)
-        bone_voxels = int(np.sum(smoothed >= level))
-        total_voxels = smoothed.size
-        print(
-            f"[Reconstruction][DIAG] Seuil osseux fixe={level:.0f} HU — "
-            f"voxels >= seuil: {bone_voxels}/{total_voxels} "
-            f"({100.0 * bone_voxels / max(total_voxels, 1):.2f}%)"
-        )
+        clean_volume = (labeled == largest_component).astype(np.float32) * CLEAN_VOLUME_HU + 1.0
+        volume_for_mc = gaussian_filter(clean_volume, sigma=CLEAN_GAUSSIAN_SIGMA)
 
         step_size = 2
-        verts, faces, normals = self._run_marching_cubes(
-            smoothed, level, voxel_spacing, step_size
+        verts, faces, normals, _values = marching_cubes(
+            volume_for_mc,
+            level=CLEAN_VOLUME_LEVEL,
+            step_size=step_size,
+            allow_degenerate=False,
         )
 
         while len(faces) > MAX_TRIANGLES and step_size < 6:
             step_size += 1
             print(
-                f"[Reconstruction][DIAG] Trop de faces ({len(faces)}) — "
-                f"step_size={step_size}"
+                f"[Reconstruction][DIAG] Trop de faces ({len(faces)}) - step_size={step_size}"
             )
-            verts, faces, normals = self._run_marching_cubes(
-                smoothed, level, voxel_spacing, step_size
+            verts, faces, normals, _values = marching_cubes(
+                volume_for_mc,
+                level=CLEAN_VOLUME_LEVEL,
+                step_size=step_size,
+                allow_degenerate=False,
             )
 
+        center = verts.mean(axis=0)
+        verts_centered = verts - center
+        max_abs = float(np.abs(verts_centered).max())
+        scale = VERTS_DISPLAY_SCALE / max_abs if max_abs > 0 else 1.0
+        verts_normalized = verts_centered * scale
+
         print(
-            f"[Reconstruction][DIAG] Maillage final — "
-            f"vertices={len(verts)}, faces={len(faces)}, step_size={step_size}"
+            f"[Reconstruction][DIAG] Mesh final : {len(verts_normalized)} sommets, "
+            f"{len(faces)} faces, step_size={step_size}"
         )
 
         return {
-            "vertices": verts.tolist(),
+            "vertices": verts_normalized.tolist(),
             "faces": faces.tolist(),
             "normals": normals.tolist(),
+            "stats": {
+                "nb_sommets": len(verts_normalized),
+                "nb_faces": len(faces),
+                "spacing_xy_mm": pixel_spacing,
+                "spacing_z_mm": slice_thickness,
+                "z_crop_start": debut,
+                "z_crop_end": fin,
+            },
         }
-
-    @staticmethod
-    def _run_marching_cubes(
-        smoothed: np.ndarray,
-        level: float,
-        voxel_spacing: tuple[float, float, float],
-        step_size: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        verts, faces, normals, _values = marching_cubes(
-            smoothed,
-            level=level,
-            spacing=voxel_spacing,
-            step_size=step_size,
-        )
-        return verts, faces, normals
 
     def _procedural_spine_mesh(
         self,
         volume: np.ndarray,
         spacing: dict[str, Any],
     ) -> dict[str, Any]:
-        """Maillage cervical simplifié pour examens démo ou volumes non-DICOM."""
+        """Maillage cervical simplifie pour examens demo ou volumes non-DICOM."""
         pixel_spacing = spacing.get("pixel_spacing", [0.5, 0.5])
         slice_thickness = float(spacing.get("slice_thickness", 1.0))
         z_extent = volume.shape[0] * slice_thickness
@@ -217,15 +282,23 @@ class ReconstructionService:
             all_normals.extend(norms)
             vertex_offset += len(verts)
 
+        verts_arr = np.array(all_vertices, dtype=np.float32)
+        center = verts_arr.mean(axis=0)
+        verts_centered = verts_arr - center
+        max_abs = float(np.abs(verts_centered).max())
+        scale = VERTS_DISPLAY_SCALE / max_abs if max_abs > 0 else 1.0
+        verts_normalized = (verts_centered * scale).tolist()
+
         print(
-            f"[Reconstruction][DIAG] Maillage procédural — "
-            f"vertices={len(all_vertices)}, faces={len(all_faces)}"
+            f"[Reconstruction][DIAG] Maillage procedural - "
+            f"vertices={len(verts_normalized)}, faces={len(all_faces)}"
         )
 
         return {
-            "vertices": all_vertices,
+            "vertices": verts_normalized,
             "faces": all_faces,
             "normals": all_normals,
+            "stats": {"nb_sommets": len(verts_normalized), "nb_faces": len(all_faces)},
         }
 
     @staticmethod

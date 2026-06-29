@@ -5,6 +5,7 @@ import type {
   ExamenListResponse,
   FetchExamensParams,
 } from '../types/examen'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from './client'
 
 const CHUNK_SIZE = 50
@@ -98,6 +99,22 @@ export async function fetchExamensList(
 ): Promise<ExamenListResponse> {
   const { data } = await apiClient.get<ExamenListResponse>('/examens', { params })
   return data
+}
+
+export async function deleteExamen(studyId: string): Promise<void> {
+  await apiClient.delete(`/examens/${studyId}`)
+}
+
+export function useDeleteExamenMutation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: deleteExamen,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['examens-list'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      void queryClient.invalidateQueries({ queryKey: ['recent-examens'] })
+    },
+  })
 }
 
 export function getSliceImageUrl(

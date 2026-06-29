@@ -1,11 +1,16 @@
 import type { ReactNode } from 'react'
 
+import { cn } from '../../utils/cn'
+
 interface PageShellProps {
   children: ReactNode
+  className?: string
 }
 
-export function PageShell({ children }: PageShellProps) {
-  return <div className="px-4 py-4 sm:px-6 lg:px-8 lg:py-6">{children}</div>
+export function PageShell({ children, className }: PageShellProps) {
+  return (
+    <div className={cn('px-4 py-4 sm:px-6 lg:px-8 lg:py-6', className)}>{children}</div>
+  )
 }
 
 interface PlaceholderPanelProps {

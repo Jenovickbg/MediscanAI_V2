@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import assert_examen_access, get_current_user
 from app.models.utilisateur import Utilisateur
 from app.schemas.examen import (
     ExamenListItemSchema,
@@ -127,6 +127,9 @@ def list_examens(
     db: Session = Depends(get_db),
     current_user: Utilisateur = Depends(get_current_user),
 ) -> ExamenListResponse:
+    uploaded_by = current_user.id if current_user.role == "medecin" else None
+    include_uploader = current_user.role == "admin"
+
     data = examen_service.list_examens(
         db,
         page=page,
@@ -134,6 +137,8 @@ def list_examens(
         search=search,
         result_filter=result or "all",  # type: ignore[arg-type]
         period=period or "all",  # type: ignore[arg-type]
+        uploaded_by=uploaded_by,
+        include_uploader=include_uploader,
     )
     return ExamenListResponse(
         items=[ExamenListItemSchema.model_validate(item) for item in data["items"]],
@@ -152,6 +157,7 @@ def get_examen(
     examen = examen_service.get_examen_by_study_id(db, study_id)
     if examen is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Examen introuvable")
+    assert_examen_access(examen, current_user)
     return ExamenSchema.model_validate(examen)
 
 
@@ -161,16 +167,10 @@ def delete_examen(
     db: Session = Depends(get_db),
     current_user: Utilisateur = Depends(get_current_user),
 ) -> dict[str, bool]:
-    import shutil
-
     examen = examen_service.get_examen_by_study_id(db, study_id)
     if examen is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Examen introuvable")
+    assert_examen_access(examen, current_user)
 
-    study_path = settings.UPLOAD_DIR / study_id
-    if study_path.exists():
-        shutil.rmtree(study_path)
-
-    db.delete(examen)
-    db.commit()
+    examen_service.delete_examen(db, examen)
     return {"success": True}

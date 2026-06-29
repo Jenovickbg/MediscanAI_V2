@@ -10,6 +10,7 @@ import {
   loadPngBlobAsCornerstoneImage,
 } from '../../lib/cornerstone'
 import { useViewerStore } from '../../store/viewerStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import { cn } from '../../utils/cn'
 import { Button, LoadingSpinner, Slider } from '../ui'
 import { GradCamOverlay } from './GradCamOverlay'
@@ -27,7 +28,10 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
   const [loadingSlice, setLoadingSlice] = useState(true)
   const [viewerError, setViewerError] = useState<string | null>(null)
   const [gradCamActive, setGradCamActive] = useState(false)
-  const [gradCamOpacity, setGradCamOpacity] = useState(60)
+  const defaultGradCamOpacity = useSettingsStore((s) => s.gradCamOpacity)
+  const [gradCamOpacity, setGradCamOpacity] = useState(defaultGradCamOpacity)
+  const windowCenter = useSettingsStore((s) => s.windowCenter)
+  const windowWidth = useSettingsStore((s) => s.windowWidth)
   const toolsReadyRef = useRef(false)
   const selectedVertebra = useViewerStore((s) => s.selectedVertebra)
   const targetSliceIndex = useViewerStore((s) => s.targetSliceIndex)
@@ -66,7 +70,7 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
         initCornerstone()
         cornerstone.enable(element)
 
-        const blob = await fetchSliceBlob(studyId, index, 'axial')
+        const blob = await fetchSliceBlob(studyId, index, 'axial', windowCenter, windowWidth)
         const image = await loadPngBlobAsCornerstoneImage(
           blob,
           `mediscan-${studyId}-axial-${index}`,
@@ -84,7 +88,7 @@ export function AxialViewer({ studyId, className }: AxialViewerProps) {
         setLoadingSlice(false)
       }
     },
-    [coupeInfo, studyId],
+    [coupeInfo, studyId, windowCenter, windowWidth],
   )
 
   useEffect(() => {

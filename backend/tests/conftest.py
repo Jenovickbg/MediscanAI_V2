@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 TEST_DB_PATH = Path(tempfile.gettempdir()) / "mediscanai_pytest.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH.as_posix()}"
+# Évite le chargement PyTorch + l'inférence sur 200+ coupes pendant pytest.
+os.environ["MEDISCANAI_FORCE_MOCK"] = "1"
 
 from app.core.database import SessionLocal, init_db  # noqa: E402
 from app.main import app  # noqa: E402

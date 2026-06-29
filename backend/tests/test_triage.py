@@ -19,15 +19,16 @@ def test_classifier_triage_three_levels():
 
 def test_load_triage_thresholds_from_json():
     thresholds = load_triage_thresholds()
-    assert thresholds.seuil_bas == 0.03
-    assert thresholds.seuil_haut == 0.10
+    assert thresholds.seuil_bas == 0.15
+    assert thresholds.seuil_haut == 0.30
+    assert thresholds.score_thresh_rcnn == 0.50
 
 
 def test_load_triage_thresholds_fallback_on_missing_file():
     missing = Path(tempfile.gettempdir()) / "missing_triage_config.json"
     thresholds = load_triage_thresholds(missing)
-    assert thresholds.seuil_bas == 0.03
-    assert thresholds.seuil_haut == 0.10
+    assert thresholds.seuil_bas == 0.15
+    assert thresholds.seuil_haut == 0.30
 
 
 def test_run_model_1_triage_mock_all_slices():
@@ -55,8 +56,8 @@ def test_predict_volume_includes_triage_fields():
 def test_coupes_flaguees_excludes_normal():
     triage = [
         {"slice": 0, "score": 0.01, "categorie": "normal"},
-        {"slice": 1, "score": 0.05, "categorie": "incertain"},
-        {"slice": 2, "score": 0.15, "categorie": "eleve"},
+        {"slice": 1, "score": 0.20, "categorie": "incertain"},
+        {"slice": 2, "score": 0.35, "categorie": "eleve"},
     ]
     flagged = pipeline_service.coupes_flaguees_from_triage(triage)
     assert flagged == [1, 2]

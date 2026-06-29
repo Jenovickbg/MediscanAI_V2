@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.models.examen import Examen
 from app.models.resultat import ResultatAnalyse, VERTEBRES
 from app.services.examen_service import ExamenService
+from app.utils.datetime_utils import examen_display_datetime
 from app.services.pipeline_service import pipeline_service
 
 from app.services.triage_config import (
@@ -91,7 +92,7 @@ class ReportService:
         story.append(Paragraph(f"<b>MediScanAI</b> — Rapport d'analyse cervicale", body_style))
         story.append(Spacer(1, 0.4 * cm))
 
-        patient_date = examen.date_examen or examen.uploaded_at
+        patient_date = examen_display_datetime(examen)
         patient_rows = [
             ["Patient ID", examen.patient_id],
             ["Study UID", examen.study_instance_uid],

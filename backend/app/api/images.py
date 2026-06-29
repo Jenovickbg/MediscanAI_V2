@@ -3,7 +3,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import assert_examen_access, get_current_user
 from app.models.utilisateur import Utilisateur
 from app.services.examen_service import ExamenService
 from app.services.pipeline_service import pipeline_service
@@ -21,6 +21,7 @@ def get_coupe_info(
     examen = examen_service.get_examen_by_study_id(db, study_id)
     if examen is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Examen introuvable")
+    assert_examen_access(examen, current_user)
 
     try:
         volume, _ = examen_service.dicom_service.get_cached_volume(examen.dicom_path)
@@ -55,6 +56,7 @@ def get_coupe_image(
     examen = examen_service.get_examen_by_study_id(db, study_id)
     if examen is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Examen introuvable")
+    assert_examen_access(examen, current_user)
 
     try:
         volume, _ = examen_service.dicom_service.get_cached_volume(examen.dicom_path)
@@ -90,6 +92,7 @@ def get_mpr_image(
     examen = examen_service.get_examen_by_study_id(db, study_id)
     if examen is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Examen introuvable")
+    assert_examen_access(examen, current_user)
 
     try:
         volume, _ = examen_service.dicom_service.get_cached_volume(examen.dicom_path)
@@ -121,6 +124,7 @@ def get_gradcam_image(
     examen = examen_service.get_examen_by_study_id(db, study_id)
     if examen is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Examen introuvable")
+    assert_examen_access(examen, current_user)
 
     try:
         volume, _ = examen_service.dicom_service.load_volume_from_study(examen.dicom_path)
@@ -147,6 +151,7 @@ def get_reconstruction_3d(
     examen = examen_service.get_examen_by_study_id(db, study_id)
     if examen is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Examen introuvable")
+    assert_examen_access(examen, current_user)
 
     resultat = analyse_service.get_resultat(db, study_id)
     scores: dict[str, float] = {}
@@ -162,15 +167,16 @@ def get_reconstruction_3d(
         scores = {f"C{i}": 0.1 for i in range(1, 8)}
 
     try:
-        volume, spacing = examen_service.dicom_service.get_cached_volume(examen.dicom_path)
         recon_service = ReconstructionService()
         mesh = recon_service.get_or_build_mesh(
             study_id,
-            volume,
-            spacing,
+            examen.dicom_path,
             scores,
             niveaux_risque=niveaux_risque or None,
         )
+        mesh.setdefault("vertex_colors", ["#00E5A0"] * len(mesh.get("vertices", [])))
+        mesh.setdefault("vertebrae_bounds", {})
+        mesh.setdefault("fracture_markers", [])
         return Reconstruction3DSchema.model_validate(mesh).model_dump()
     except Exception as exc:
         raise HTTPException(

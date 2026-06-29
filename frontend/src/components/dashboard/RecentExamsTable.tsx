@@ -45,7 +45,7 @@ export function RecentExamsTable({ exams, isLoading }: RecentExamsTableProps) {
               <thead>
                 <tr className="border-b border-border bg-bg-secondary/50 text-xs uppercase tracking-wide text-text-muted">
                   <th className="px-4 py-3 font-medium">Patient ID</th>
-                  <th className="px-4 py-3 font-medium">Date</th>
+                  <th className="px-4 py-3 font-medium">Date import</th>
                   <th className="px-4 py-3 font-medium">Vertèbres</th>
                   <th className="px-4 py-3 font-medium">Score</th>
                   <th className="px-4 py-3 font-medium">Résultat</th>

@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { LogOut, Scan } from 'lucide-react'
 
-import { APP_VERSION, MAIN_NAV_ITEMS } from '../../config/navigation'
+import { APP_VERSION, getNavItemsForRole } from '../../config/navigation'
 import { useAuthStore } from '../../store/authStore'
 import { cn } from '../../utils/cn'
 import { Badge } from '../ui'
@@ -22,6 +22,8 @@ export function Sidebar({ onNavigate }: SidebarProps) {
     .slice(0, 2)
     .toUpperCase()
 
+  const navItems = getNavItemsForRole(user?.role)
+
   return (
     <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-border bg-bg-secondary">
       <div className="border-b border-border px-4 py-5">
@@ -37,7 +39,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Navigation principale">
-        {MAIN_NAV_ITEMS.map(({ label, path, icon: Icon }) => (
+        {navItems.map(({ label, path, icon: Icon }) => (
           <NavLink
             key={path}
             to={path}

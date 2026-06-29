@@ -25,7 +25,7 @@ type MobilePanel = 'scores' | 'viewer' | 'detail'
 
 export function ViewerPage() {
   const { studyId } = useParams<{ studyId: string }>()
-  const { progress, result, error, isRunning, retry } = useAnalysis(studyId)
+  const { progress, message, result, error, isRunning, isSlow, retry } = useAnalysis(studyId)
   const [activeTab, setActiveTab] = useState<ViewerTab>('axial')
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>('viewer')
   const resetViewer = useViewerStore((s) => s.reset)
@@ -96,12 +96,24 @@ export function ViewerPage() {
 
       {isRunning && (
         <div className="shrink-0 border-b border-border bg-bg-secondary px-4 py-2">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <LoadingSpinner size="sm" />
-            <span className="text-xs text-text-secondary">Analyse IA — {progress}%</span>
-            <div className="flex-1">
+            <span className="text-xs text-text-secondary">
+              Analyse IA — {progress}%
+              {message ? ` — ${message}` : ''}
+            </span>
+            <div className="min-w-[120px] flex-1">
               <ProgressBar value={progress} riskLevel="neutral" />
             </div>
+            {(isSlow || isRunning) && (
+              <span className="text-xs text-text-muted">
+                Analyse complète sur CPU — comptez 20 à 55 min pour ~220 coupes. Ne fermez pas
+                cette fenêtre.
+              </span>
+            )}
+            <Button variant="ghost" className="h-7 px-2 text-xs" onClick={retry}>
+              Relancer
+            </Button>
           </div>
         </div>
       )}
@@ -123,7 +135,14 @@ export function ViewerPage() {
           </div>
 
           <div className="p-4">
-            {!result && !isRunning && (
+            {!result && (isRunning || error) && (
+              <p className="text-sm text-text-secondary">
+                {isRunning
+                  ? `Analyse en cours… ${progress}%`
+                  : 'Analyse interrompue — cliquez sur Réessayer dans la barre du haut.'}
+              </p>
+            )}
+            {!result && !isRunning && !error && (
               <p className="text-sm text-text-secondary">En attente de l&apos;analyse…</p>
             )}
 

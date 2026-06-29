@@ -7,12 +7,14 @@ export default defineConfig({
   optimizeDeps: {
     include: ['cornerstone-core', 'cornerstone-math', 'cornerstone-tools', 'hammerjs'],
   },
-  server: {
+    server: {
+    host: '127.0.0.1',
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8006',
         changeOrigin: true,
+        ws: true,
       },
     },
   },

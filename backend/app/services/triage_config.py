@@ -15,22 +15,25 @@ logger = logging.getLogger(__name__)
 TriageCategory = Literal["normal", "incertain", "eleve"]
 
 DEFAULT_THRESHOLDS = {
-    "seuil_bas": 0.03,
-    "seuil_haut": 0.10,
-    "derniere_maj": "PLACEHOLDER",
+    "seuil_bas": 0.15,
+    "seuil_haut": 0.30,
+    "score_thresh_rcnn": 0.50,
+    "nms_thresh_rcnn": 0.30,
+    "max_detections": 3,
+    "derniere_maj": "2025-06",
 }
 
 
 @dataclass(frozen=True)
 class TriageThresholds:
-    """
-    Seuils de triage clinique du Modèle 1.
-    Valeurs provisoires — recalibrées après réentraînement final.
-    """
+    """Seuils de triage clinique du Modèle 1 et paramètres RCNN (Modèle 2)."""
 
     seuil_bas: float
     seuil_haut: float
-    derniere_maj: str = "PLACEHOLDER"
+    score_thresh_rcnn: float = 0.50
+    nms_thresh_rcnn: float = 0.30
+    max_detections: int = 3
+    derniere_maj: str = "2025-06"
 
 
 def load_triage_thresholds(path: Path | None = None) -> TriageThresholds:
@@ -45,11 +48,38 @@ def load_triage_thresholds(path: Path | None = None) -> TriageThresholds:
         return TriageThresholds(
             seuil_bas=float(data["seuil_bas"]),
             seuil_haut=float(data["seuil_haut"]),
-            derniere_maj=str(data.get("derniere_maj", "PLACEHOLDER")),
+            score_thresh_rcnn=float(data.get("score_thresh_rcnn", 0.50)),
+            nms_thresh_rcnn=float(data.get("nms_thresh_rcnn", 0.30)),
+            max_detections=int(data.get("max_detections", 3)),
+            derniere_maj=str(data.get("derniere_maj", "2025-06")),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("Config triage invalide (%s) — valeurs par défaut: %s", config_path, exc)
         return TriageThresholds(**DEFAULT_THRESHOLDS)
+
+
+def save_triage_thresholds(thresholds: TriageThresholds, path: Path | None = None) -> TriageThresholds:
+    """Persiste les seuils dans le fichier JSON (conserve les métadonnées existantes)."""
+    config_path = path or (BACKEND_DIR / settings.TRIAGE_THRESHOLDS_PATH)
+    existing: dict = {}
+    if config_path.exists():
+        try:
+            existing = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            existing = {}
+
+    payload = {
+        **existing,
+        "seuil_bas": thresholds.seuil_bas,
+        "seuil_haut": thresholds.seuil_haut,
+        "score_thresh_rcnn": thresholds.score_thresh_rcnn,
+        "nms_thresh_rcnn": thresholds.nms_thresh_rcnn,
+        "max_detections": thresholds.max_detections,
+        "derniere_maj": thresholds.derniere_maj,
+    }
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return load_triage_thresholds(config_path)
 
 
 def classifier_triage(probability: float, thresholds: TriageThresholds) -> TriageCategory:

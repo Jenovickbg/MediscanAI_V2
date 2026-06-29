@@ -8,57 +8,62 @@ import { fetchReconstruction3D } from '../../api/reconstruction'
 import { useViewerStore } from '../../store/viewerStore'
 import { cn } from '../../utils/cn'
 import { Button, LoadingSpinner } from '../ui'
-import { VIEWER_3D_CAMERA_PADDING, VIEWER_FRAME_CLASS, VIEWER_INNER_CLASS } from './viewerLayout'
+import { VIEWER_FRAME_CLASS, VIEWER_INNER_CLASS } from './viewerLayout'
 
 interface SpineViewer3DProps {
   studyId: string
   className?: string
 }
 
-function hexToColor(hex: string): THREE.Color {
-  return new THREE.Color(hex)
-}
-
-function fitCameraToGroup(
+function fitCameraToMesh(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
   scene: THREE.Scene,
-  root: THREE.Object3D,
-  padding = VIEWER_3D_CAMERA_PADDING,
-): number {
-  const box = new THREE.Box3().setFromObject(root)
-  const sphere = new THREE.Sphere()
-  box.getBoundingSphere(sphere)
+  meshObject: THREE.Object3D,
+): { position: THREE.Vector3; target: THREE.Vector3 } {
+  meshObject.rotation.x = -Math.PI / 2
 
-  if (!Number.isFinite(sphere.radius) || sphere.radius <= 0) {
+  const box = new THREE.Box3().setFromObject(meshObject)
+  const center = box.getCenter(new THREE.Vector3())
+  const size = box.getSize(new THREE.Vector3())
+  const maxDim = Math.max(size.x, size.y, size.z)
+
+  if (!Number.isFinite(maxDim) || maxDim <= 0) {
     camera.position.set(0, 0, 80)
     camera.near = 0.1
     camera.far = 500
     camera.updateProjectionMatrix()
     controls.target.set(0, 0, 0)
     controls.update()
-    return 80
+    return {
+      position: new THREE.Vector3(0, 0, 80),
+      target: new THREE.Vector3(0, 0, 0),
+    }
   }
 
-  const fovRad = (camera.fov * Math.PI) / 180
-  const distance = (sphere.radius / Math.sin(fovRad / 2)) * padding
+  const position = new THREE.Vector3(
+    center.x + maxDim * 0.5,
+    center.y,
+    center.z + maxDim * 3.0,
+  )
 
-  camera.near = Math.max(distance / 200, 0.1)
-  camera.far = distance * 4 + sphere.radius * 6
+  camera.position.copy(position)
+  camera.lookAt(center)
+  camera.near = Math.max(maxDim / 200, 0.1)
+  camera.far = maxDim * 12
   camera.updateProjectionMatrix()
 
-  camera.position.set(sphere.center.x, sphere.center.y, sphere.center.z + distance)
-  controls.target.copy(sphere.center)
-  controls.minDistance = sphere.radius * 0.35
-  controls.maxDistance = distance * 2.5
+  controls.target.copy(center)
+  controls.minDistance = maxDim * 0.25
+  controls.maxDistance = maxDim * 8
   controls.update()
 
   if (scene.fog instanceof THREE.Fog) {
-    scene.fog.near = distance * 0.4
-    scene.fog.far = distance * 2.8 + sphere.radius * 2
+    scene.fog.near = maxDim * 1.5
+    scene.fog.far = maxDim * 10
   }
 
-  return distance
+  return { position: position.clone(), target: center.clone() }
 }
 
 export function SpineViewer3D({ studyId, className }: SpineViewer3DProps) {
@@ -70,7 +75,8 @@ export function SpineViewer3D({ studyId, className }: SpineViewer3DProps) {
   const meshGroupRef = useRef<THREE.Group | null>(null)
   const highlightRef = useRef<THREE.Mesh | null>(null)
   const meshDataRef = useRef<Awaited<ReturnType<typeof fetchReconstruction3D>> | null>(null)
-  const defaultCameraDistanceRef = useRef(80)
+  const defaultCameraPositionRef = useRef(new THREE.Vector3(0, 0, 80))
+  const defaultCameraTargetRef = useRef(new THREE.Vector3(0, 0, 0))
   const frameRef = useRef<number>(0)
   const [autoRotate, setAutoRotate] = useState(false)
   const selectedVertebra = useViewerStore((s) => s.selectedVertebra)
@@ -109,8 +115,8 @@ export function SpineViewer3D({ studyId, className }: SpineViewer3DProps) {
       if (width < 32 || height < 32) return
 
       const scene = new THREE.Scene()
-      scene.background = new THREE.Color(0x0a0f1e)
-      scene.fog = new THREE.Fog(0x0a0f1e, 40, 400)
+      scene.background = new THREE.Color(0x0d1117)
+      scene.fog = new THREE.Fog(0x0d1117, 40, 400)
 
       const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 2000)
 
@@ -127,8 +133,10 @@ export function SpineViewer3D({ studyId, className }: SpineViewer3DProps) {
       fillLight.position.set(-4, -3, -5)
       const rimLight = new THREE.DirectionalLight(0x00c6ff, 0.3)
       rimLight.position.set(0, -6, -4)
+      const fillLight2 = new THREE.DirectionalLight(0x8888ff, 0.3)
+      fillLight2.position.set(0, -5, 3)
 
-      scene.add(ambientLight, mainLight, fillLight, rimLight)
+      scene.add(ambientLight, mainLight, fillLight, rimLight, fillLight2)
 
       controls = new OrbitControls(camera, renderer.domElement)
       controls.enableDamping = true
@@ -143,21 +151,12 @@ export function SpineViewer3D({ studyId, className }: SpineViewer3DProps) {
 
       const indices = new Uint32Array(data.faces.flat())
       geometry.setIndex(new THREE.BufferAttribute(indices, 1))
-
-      const colors = new Float32Array(data.vertex_colors.length * 3)
-      data.vertex_colors.forEach((hex, i) => {
-        const color = hexToColor(hex)
-        colors[i * 3] = color.r
-        colors[i * 3 + 1] = color.g
-        colors[i * 3 + 2] = color.b
-      })
-      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
       geometry.computeVertexNormals()
 
       material = new THREE.MeshPhongMaterial({
-        vertexColors: true,
-        shininess: 45,
-        specular: new THREE.Color(0.25, 0.28, 0.35),
+        color: 0xd4a574,
+        shininess: 30,
+        specular: new THREE.Color(0.15, 0.15, 0.2),
         side: THREE.DoubleSide,
       })
 
@@ -209,7 +208,9 @@ export function SpineViewer3D({ studyId, className }: SpineViewer3DProps) {
       group.add(highlight)
       highlightRef.current = highlight
 
-      defaultCameraDistanceRef.current = fitCameraToGroup(camera, controls, scene, group)
+      const cameraFit = fitCameraToMesh(camera, controls, scene, group)
+      defaultCameraPositionRef.current.copy(cameraFit.position)
+      defaultCameraTargetRef.current.copy(cameraFit.target)
 
       const axes = new THREE.AxesHelper(2)
       axes.position.set(-3, -3, -3)
@@ -304,7 +305,7 @@ export function SpineViewer3D({ studyId, className }: SpineViewer3DProps) {
     if (highlight) {
       highlight.visible = true
       highlight.position.set(x, y, z)
-      highlight.lookAt(camera?.position ?? new THREE.Vector3(0, 0, defaultCameraDistanceRef.current))
+      highlight.lookAt(camera?.position ?? defaultCameraPositionRef.current)
     }
 
     if (controls && camera) {
@@ -315,14 +316,9 @@ export function SpineViewer3D({ studyId, className }: SpineViewer3DProps) {
   }, [selectedVertebra])
 
   const handleResetCamera = () => {
-    const distance = defaultCameraDistanceRef.current
-    const group = meshGroupRef.current
-    if (cameraRef.current && controlsRef.current && group) {
-      const box = new THREE.Box3().setFromObject(group)
-      const center = new THREE.Vector3()
-      box.getCenter(center)
-      cameraRef.current.position.set(center.x, center.y, center.z + distance)
-      controlsRef.current.target.copy(center)
+    if (cameraRef.current && controlsRef.current) {
+      cameraRef.current.position.copy(defaultCameraPositionRef.current)
+      controlsRef.current.target.copy(defaultCameraTargetRef.current)
       controlsRef.current.update()
     }
     if (meshGroupRef.current) {

@@ -35,6 +35,7 @@ export function expandVertebraScores(result: ResultatAnalyse): ScoreVertebre[] {
       vertebre,
       probabilite: entry?.probabilite ?? 0,
       niveau_risque: entry?.niveau_risque ?? 'normal',
+      confiance_vertebre: entry?.confiance_vertebre ?? null,
       localisation: LOCALISATIONS[vertebre] ?? 'Région vertébrale',
       bounding_box_x: bbox ? bbox.x / BBOX_PIXEL_SIZE : 0.35,
       bounding_box_y: bbox ? bbox.y / BBOX_PIXEL_SIZE : 0.25,

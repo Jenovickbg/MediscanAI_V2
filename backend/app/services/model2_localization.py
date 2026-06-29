@@ -6,8 +6,11 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from app.core.config import BACKEND_DIR, settings
+from app.core.config import settings
 from app.services.dicom_service import DicomService
+from app.services.triage_config import load_triage_thresholds
+from app.utils.model_paths import resolve_model_path
+from app.utils.runtime import is_ia_mock_forced
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,7 @@ class Model2LocalizationService:
 
     def __init__(self, dicom_service: DicomService | None = None) -> None:
         self.dicom_service = dicom_service or DicomService()
+        self.thresholds = load_triage_thresholds()
         self.model: Any = None
         self.device: Any = None
         self.use_mock = True
@@ -38,8 +42,12 @@ class Model2LocalizationService:
         self._try_load()
 
     def _try_load(self) -> None:
-        model_path = BACKEND_DIR / settings.MODEL_2_PATH
-        if not model_path.exists():
+        if is_ia_mock_forced():
+            logger.info("MEDISCANAI_FORCE_MOCK — Modèle 2 en mode mock")
+            return
+
+        model_path = resolve_model_path(settings.MODEL_2_PATH)
+        if model_path is None:
             logger.info(
                 "Modèle 2 absent (%s) — mode mock activé",
                 settings.MODEL_2_PATH,
@@ -57,6 +65,8 @@ class Model2LocalizationService:
             except TypeError:
                 state = torch.load(model_path, map_location="cpu")
             self.model.load_state_dict(state)
+            self.model.roi_heads.nms_thresh = self.thresholds.nms_thresh_rcnn
+            self.model.roi_heads.detections_per_img = self.thresholds.max_detections
             self.model.eval()
             self.model.to(self.device)
             self.use_mock = False
@@ -75,9 +85,18 @@ class Model2LocalizationService:
         segment = min(int(slice_idx / max(n_slices, 1) * 7), 6)
         return VERTEBRES[segment]
 
-    def _prepare_slice_rgb(self, volume: np.ndarray, slice_idx: int) -> np.ndarray:
+    def _prepare_slice_rgb(
+        self,
+        volume: np.ndarray,
+        slice_idx: int,
+        windowed_volume: np.ndarray | None = None,
+    ) -> np.ndarray:
         """Fenêtrage osseux, resize 512×512, conversion en RGB float32 [0, 1]."""
-        windowed = self.dicom_service.apply_windowing(volume.astype(np.float32))
+        windowed = (
+            windowed_volume
+            if windowed_volume is not None
+            else self.dicom_service.apply_windowing(volume.astype(np.float32))
+        )
         idx = max(0, min(slice_idx, volume.shape[0] - 1))
         gray = windowed[idx]
         resized = np.asarray(
@@ -124,12 +143,13 @@ class Model2LocalizationService:
         self,
         volume: np.ndarray,
         slice_idx: int,
+        windowed_volume: np.ndarray | None = None,
     ) -> dict[str, Any] | None:
         import torch
 
         assert self.model is not None and self.device is not None
 
-        rgb = self._prepare_slice_rgb(volume, slice_idx)
+        rgb = self._prepare_slice_rgb(volume, slice_idx, windowed_volume=windowed_volume)
         tensor = torch.from_numpy(rgb).to(self.device)
 
         with torch.no_grad():
@@ -142,10 +162,13 @@ class Model2LocalizationService:
             return None
 
         best: dict[str, Any] | None = None
+        score_min = self.thresholds.score_thresh_rcnn
         for box, label, score in zip(boxes, labels, scores):
             if int(label.item()) != self.FRACTURE_LABEL:
                 continue
             conf = float(score.item())
+            if conf < score_min:
+                continue
             if best is None or conf > best["confidence"]:
                 x1, y1, x2, y2 = box.tolist()
                 best = {
@@ -165,6 +188,7 @@ class Model2LocalizationService:
         coupes_a_traiter: list[int],
         study_id: str = "",
         triage_scores: dict[int, float] | None = None,
+        windowed_volume: np.ndarray | None = None,
     ) -> dict[int, dict[str, Any]]:
         """
         Localise les fractures sur les coupes flaguées uniquement.
@@ -178,6 +202,11 @@ class Model2LocalizationService:
         h, w = self.INPUT_SIZE
         triage_scores = triage_scores or {}
         resultats: dict[int, dict[str, Any]] = {}
+        windowed = (
+            windowed_volume
+            if windowed_volume is not None
+            else self.dicom_service.apply_windowing(volume.astype(np.float32))
+        )
 
         for slice_idx in coupes_a_traiter:
             if slice_idx < 0 or slice_idx >= n_slices:
@@ -193,7 +222,7 @@ class Model2LocalizationService:
                     triage_scores.get(slice_idx),
                 )
             else:
-                entry = self._predict_slice(volume, slice_idx)
+                entry = self._predict_slice(volume, slice_idx, windowed_volume=windowed)
                 if entry is None:
                     entry = self._mock_bbox(
                         slice_idx,

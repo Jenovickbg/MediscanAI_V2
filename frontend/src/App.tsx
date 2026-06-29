@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 
 import { refreshSession, setupApiInterceptors } from './api/client'
+import { AdminRoute } from './components/auth/AdminRoute'
 import { GuestRoute } from './components/auth/GuestRoute'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { AppLayout } from './components/layout'
@@ -11,6 +12,7 @@ import { DesignSystemShowcase } from './pages/DesignSystemShowcase'
 import { HistoriquePage } from './pages/HistoriquePage'
 import { ImportPage } from './pages/ImportPage'
 import { LoginPage } from './pages/LoginPage'
+import { MedecinsPage } from './pages/MedecinsPage'
 import { ParametresPage } from './pages/ParametresPage'
 import { ProfilPage } from './pages/ProfilPage'
 import { RapportPage } from './pages/RapportPage'
@@ -27,12 +29,22 @@ function AppRoutes() {
 
     async function bootstrapAuth() {
       const { token, setLoading } = useAuthStore.getState()
-      if (token) {
-        await refreshSession()
-      } else {
-        setLoading(false)
+      try {
+        if (token) {
+          await Promise.race([
+            refreshSession(),
+            new Promise<never>((_, reject) => {
+              window.setTimeout(() => reject(new Error('auth-timeout')), 10_000)
+            }),
+          ])
+        } else {
+          setLoading(false)
+        }
+      } catch {
+        useAuthStore.getState().setLoading(false)
+      } finally {
+        setBootstrapped(true)
       }
-      setBootstrapped(true)
     }
 
     if (useAuthStore.persist.hasHydrated()) {
@@ -40,9 +52,10 @@ function AppRoutes() {
       return
     }
 
-    return useAuthStore.persist.onFinishHydration(() => {
+    const unsub = useAuthStore.persist.onFinishHydration(() => {
       void bootstrapAuth()
     })
+    return unsub
   }, [navigate])
 
   if (!bootstrapped) {
@@ -74,6 +87,9 @@ function AppRoutes() {
           <Route path="/statistiques" element={<StatistiquesPage />} />
           <Route path="/parametres" element={<ParametresPage />} />
           <Route path="/profil" element={<ProfilPage />} />
+          <Route element={<AdminRoute />}>
+            <Route path="/admin/medecins" element={<MedecinsPage />} />
+          </Route>
         </Route>
 
         <Route path="/design-system" element={<DesignSystemShowcase />} />

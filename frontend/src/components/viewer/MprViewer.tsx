@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Layers, RotateCcw } from 'lucide-react'
 
 import { fetchCoupeInfo, fetchMprBlob } from '../../api/images'
+import { useSettingsStore } from '../../store/settingsStore'
 import { cn } from '../../utils/cn'
 import { Button, LoadingSpinner } from '../ui'
 import { VIEWER_FRAME_CLASS, VIEWER_IMAGE_CENTER_CLASS } from './viewerLayout'
@@ -34,6 +35,8 @@ export function MprViewer({ studyId, view, className }: MprViewerProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [loadingSlice, setLoadingSlice] = useState(true)
   const [viewerError, setViewerError] = useState<string | null>(null)
+  const windowCenter = useSettingsStore((s) => s.windowCenter)
+  const windowWidth = useSettingsStore((s) => s.windowWidth)
 
   const { data: coupeInfo, isLoading: infoLoading, error: infoError } = useQuery({
     queryKey: ['coupe-info', studyId],
@@ -52,7 +55,7 @@ export function MprViewer({ studyId, view, className }: MprViewerProps) {
     setViewerError(null)
 
     try {
-      const blob = await fetchMprBlob(studyId, view, sliceIndex)
+      const blob = await fetchMprBlob(studyId, view, sliceIndex, windowCenter, windowWidth)
       const url = URL.createObjectURL(blob)
       setImageUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev)
@@ -63,7 +66,7 @@ export function MprViewer({ studyId, view, className }: MprViewerProps) {
     } finally {
       setLoadingSlice(false)
     }
-  }, [coupeInfo, sliceIndex, studyId, view])
+  }, [coupeInfo, sliceIndex, studyId, view, windowCenter, windowWidth])
 
   useEffect(() => {
     void loadSlice()

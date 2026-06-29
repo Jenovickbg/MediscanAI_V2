@@ -1,13 +1,14 @@
 import numpy as np
 import pytest
 
-from app.services.model3_vertebra import VERTEBRA_CLASSES, Model3VertebraService
+from app.models.resultat import VERTEBRES
+from app.services.model3_vertebra import VERTEBRA_CLASSES, VERTEBRA_CLASSES_7, Model3VertebraService
 from app.services.pipeline_service import pipeline_service
 
 
 def test_vertebra_classes_order():
-    assert VERTEBRA_CLASSES[0] == "hors_zone"
-    assert list(VERTEBRA_CLASSES[1:]) == ["C1", "C2", "C3", "C4", "C5", "C6", "C7"]
+    assert list(VERTEBRA_CLASSES) == list(VERTEBRES)
+    assert VERTEBRA_CLASSES == VERTEBRA_CLASSES_7
 
 
 def test_model3_runs_only_on_flagged_slices():
@@ -23,8 +24,9 @@ def test_model3_runs_only_on_flagged_slices():
     assert set(resultats.keys()) == {2, 9, 15}
     assert len(resultats) == 3
     assert len(resultats) < volume.shape[0]
-    for label in resultats.values():
-        assert label in VERTEBRA_CLASSES
+    for entry in resultats.values():
+        assert "vertebre" in entry and "confiance" in entry
+        assert entry["vertebre"] in VERTEBRA_CLASSES
 
 
 def test_model3_empty_when_no_flagged_slices():

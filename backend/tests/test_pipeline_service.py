@@ -64,5 +64,5 @@ def test_generate_clinical_report_contains_sections():
 def test_mock_mode_when_model_missing():
     service = pipeline_service
     assert service.use_mock is True
-    assert service.thresholds.seuil_bas == 0.03
-    assert service.thresholds.seuil_haut == 0.10
+    assert service.thresholds.seuil_bas == 0.15
+    assert service.thresholds.seuil_haut == 0.30

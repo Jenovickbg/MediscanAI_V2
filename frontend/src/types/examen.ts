@@ -55,6 +55,8 @@ export interface ExamenListItem {
   score_global: number | null
   fracture_detectee: boolean | null
   analysed: boolean
+  uploaded_by?: number | null
+  medecin_nom?: string | null
 }
 
 export interface ExamenListResponse {

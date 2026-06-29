@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.examen import Examen
 from app.models.resultat import ResultatAnalyse, ScoreVertebre, VERTEBRES
 from app.services.triage_config import is_vertebra_at_risk, resolve_niveau_risque
+from app.utils.datetime_utils import ensure_utc, examen_display_datetime
 
 PeriodKey = Literal["7d", "30d", "90d"]
 PERIOD_DAYS: dict[str, int] = {"7d": 7, "30d": 30, "90d": 90}
@@ -22,41 +23,52 @@ MODEL_METRICS = {
 
 
 class StatsService:
-    def get_dashboard(self, db: Session, recent_limit: int = 10) -> dict:
+    def get_dashboard(self, db: Session, recent_limit: int = 10, uploaded_by: int | None = None) -> dict:
         now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        today_exams = (
-            db.query(func.count(ResultatAnalyse.id))
-            .filter(ResultatAnalyse.date_analyse >= today_start)
-            .scalar()
-            or 0
-        )
+        def _on_or_after(column, start: datetime):
+            """SQLite may store naive datetimes — compare on calendar day in UTC."""
+            return func.date(column) >= start.date().isoformat()
 
-        month_fractures = (
+        today_query = (
             db.query(func.count(ResultatAnalyse.id))
+            .join(Examen, Examen.study_instance_uid == ResultatAnalyse.study_instance_uid)
+            .filter(_on_or_after(ResultatAnalyse.date_analyse, today_start))
+        )
+        month_fractures_query = (
+            db.query(func.count(ResultatAnalyse.id))
+            .join(Examen, Examen.study_instance_uid == ResultatAnalyse.study_instance_uid)
             .filter(
-                ResultatAnalyse.date_analyse >= month_start,
+                _on_or_after(ResultatAnalyse.date_analyse, month_start),
                 ResultatAnalyse.fracture_detectee.is_(True),
             )
-            .scalar()
-            or 0
         )
+        avg_score_query = db.query(func.avg(ResultatAnalyse.score_global))
+        avg_time_query = db.query(func.avg(ResultatAnalyse.duree_analyse_sec))
 
-        avg_score = (
-            db.query(func.avg(ResultatAnalyse.score_global))
-            .scalar()
-        )
-        avg_time = (
-            db.query(func.avg(ResultatAnalyse.duree_analyse_sec))
-            .scalar()
-        )
+        if uploaded_by is not None:
+            today_query = today_query.filter(Examen.uploaded_by == uploaded_by)
+            month_fractures_query = month_fractures_query.filter(Examen.uploaded_by == uploaded_by)
+            avg_score_query = avg_score_query.join(
+                Examen, Examen.study_instance_uid == ResultatAnalyse.study_instance_uid
+            ).filter(Examen.uploaded_by == uploaded_by)
+            avg_time_query = avg_time_query.join(
+                Examen, Examen.study_instance_uid == ResultatAnalyse.study_instance_uid
+            ).filter(Examen.uploaded_by == uploaded_by)
+
+        today_exams = today_query.scalar() or 0
+        month_fractures = month_fractures_query.scalar() or 0
+        avg_score = avg_score_query.scalar()
+        avg_time = avg_time_query.scalar()
+
+        examens_query = db.query(Examen).options(joinedload(Examen.patient))
+        if uploaded_by is not None:
+            examens_query = examens_query.filter(Examen.uploaded_by == uploaded_by)
 
         examens = (
-            db.query(Examen)
-            .options(joinedload(Examen.patient))
-            .order_by(Examen.uploaded_at.desc())
+            examens_query.order_by(Examen.uploaded_at.desc())
             .limit(recent_limit)
             .all()
         )
@@ -75,7 +87,7 @@ class StatsService:
         recent_exams: list[dict] = []
         for examen in examens:
             resultat = resultats_by_study.get(examen.study_instance_uid)
-            display_date = examen.date_examen or examen.uploaded_at
+            display_date = examen_display_datetime(examen)
 
             vertebres: list[str] = []
             score_global: float | None = None
@@ -107,19 +119,24 @@ class StatsService:
             "recent_exams": recent_exams,
         }
 
-    def get_historique(self, db: Session, period: PeriodKey = "30d") -> dict:
+    def get_historique(self, db: Session, period: PeriodKey = "30d", uploaded_by: int | None = None) -> dict:
         days = PERIOD_DAYS.get(period, 30)
         now = datetime.now(timezone.utc)
         start = (now - timedelta(days=days - 1)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
 
-        resultats = (
+        resultats_query = (
             db.query(ResultatAnalyse)
             .options(joinedload(ResultatAnalyse.scores_vertebres))
             .filter(ResultatAnalyse.date_analyse >= start)
-            .all()
         )
+        if uploaded_by is not None:
+            resultats_query = resultats_query.join(
+                Examen, Examen.study_instance_uid == ResultatAnalyse.study_instance_uid
+            ).filter(Examen.uploaded_by == uploaded_by)
+
+        resultats = resultats_query.all()
 
         daily_map: dict[date, int] = {}
         for offset in range(days):

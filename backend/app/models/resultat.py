@@ -49,5 +49,6 @@ class ScoreVertebre(Base):
     bounding_box_h: Mapped[float] = mapped_column(Float, default=0.0)
     coupe_reference: Mapped[int] = mapped_column(Integer, default=0)
     niveau_risque: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    confiance_vertebre: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     resultat: Mapped["ResultatAnalyse"] = relationship(back_populates="scores_vertebres")

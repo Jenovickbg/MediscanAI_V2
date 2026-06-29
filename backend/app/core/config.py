@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     MODEL_PATH: str = "model/model1_classifier_densenet121.pth"
     MODEL_1_PATH: str = "model/model1_classifier_densenet121.pth"
     MODEL_2_PATH: str = "model/model2_fasterrcnn.pth"
-    MODEL_3_PATH: str = "model/model3_vertebre_densenet121.pth"
+    MODEL_3_PATH: str = "model/model3_vertebra_densenet121.pth"
     TRIAGE_THRESHOLDS_PATH: str = "config/triage_thresholds.json"
     DATA_DIR: Path = BACKEND_DIR.parent / "data"
     CACHE_DIR: Path = BACKEND_DIR / "cache"

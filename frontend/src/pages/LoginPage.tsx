@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { isAxiosError } from 'axios'
 import { Eye, EyeOff, Scan } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
@@ -26,8 +27,27 @@ export function LoginPage() {
       const response = await loginApi({ email, password })
       setAuth(response.access_token, response.user)
       navigate('/dashboard', { replace: true })
-    } catch {
-      setError('Email ou mot de passe incorrect')
+    } catch (err) {
+      if (isAxiosError(err)) {
+        if (!err.response) {
+          setError(
+            'Serveur injoignable. Démarrez le backend : cd backend puis .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --port 8006',
+          )
+        } else if (err.response.status === 502) {
+          setError(
+            'Backend injoignable (502). Lancez-le : cd backend puis .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --port 8006',
+          )
+        } else if (err.response.status === 401) {
+          setError('Email ou mot de passe incorrect')
+        } else if (err.response.status === 403) {
+          const detail = err.response.data?.detail
+          setError(typeof detail === 'string' ? detail : 'Accès refusé')
+        } else {
+          setError(`Erreur serveur (${err.response.status}). Réessayez ou redémarrez le backend.`)
+        }
+      } else {
+        setError('Email ou mot de passe incorrect')
+      }
     } finally {
       setLoading(false)
     }
@@ -123,7 +143,7 @@ export function LoginPage() {
         </form>
 
         <p className="mt-6 text-center text-xs text-text-muted">
-          Comptes de démonstration disponibles après initialisation du serveur.
+          Comptes démo : admin@mediscanai.cd / Admin2025! — dr.kabila@mediscanai.cd / Medecin2025!
         </p>
       </div>
     </div>

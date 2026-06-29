@@ -53,3 +53,22 @@ def test_get_examen_after_demo(client: TestClient, auth_headers: dict[str, str],
     body = response.json()
     assert body["study_instance_uid"] == demo_study_id
     assert body["nb_coupes"] > 0
+
+
+def test_delete_examen(client: TestClient, auth_headers: dict[str, str], demo_study_id: str) -> None:
+    response = client.delete(f"/api/examens/{demo_study_id}", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+    get_response = client.get(f"/api/examens/{demo_study_id}", headers=auth_headers)
+    assert get_response.status_code == 404
+
+
+def test_delete_examen_not_found(client: TestClient, auth_headers: dict[str, str]) -> None:
+    response = client.delete("/api/examens/UNKNOWN-STUDY-ID", headers=auth_headers)
+    assert response.status_code == 404
+
+
+def test_delete_examen_requires_auth(client: TestClient, demo_study_id: str) -> None:
+    response = client.delete(f"/api/examens/{demo_study_id}")
+    assert response.status_code == 401

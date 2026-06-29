@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.models.examen import Examen, Patient
 from app.models.resultat import ResultatAnalyse, ScoreVertebre, VERTEBRES
+from app.utils.datetime_utils import examen_display_datetime
+from app.models.utilisateur import Utilisateur
 from app.services.dicom_service import DicomService
 from app.services.triage_config import is_vertebra_at_risk, resolve_niveau_risque
 from app.services.upload_task_store import UploadTask, upload_task_store
@@ -80,6 +82,13 @@ class ExamenService:
             .first()
         )
         if existing is not None:
+            old_result = (
+                db.query(ResultatAnalyse)
+                .filter(ResultatAnalyse.study_instance_uid == study_uid)
+                .first()
+            )
+            if old_result is not None:
+                db.delete(old_result)
             db.delete(existing)
             db.flush()
 
@@ -144,7 +153,7 @@ class ExamenService:
         examen = Examen(
             study_instance_uid=study_uid,
             patient_id=patient_id,
-            date_examen=datetime.now(),
+            date_examen=datetime.now(timezone.utc),
             nb_coupes=len(png_files),
             dicom_path=str(final_dir),
             uploaded_by=uploaded_by,
@@ -158,7 +167,7 @@ class ExamenService:
             "metadata": {
                 "patient_id": patient_id,
                 "study_instance_uid": study_uid,
-                "date_examen": datetime.now().isoformat(),
+                "date_examen": datetime.now(timezone.utc).isoformat(),
                 "nb_coupes": len(png_files),
                 "dimensions": [512, 512, len(png_files)],
                 "pixel_spacing": [0.5, 0.5],
@@ -171,6 +180,49 @@ class ExamenService:
     def get_examen_by_study_id(self, db: Session, study_id: str) -> Examen | None:
         return db.query(Examen).filter(Examen.study_instance_uid == study_id).first()
 
+    def delete_examen(self, db: Session, examen: Examen) -> None:
+        from app.services.analyse_service import analyse_service
+        from app.services.analyse_task_store import analyse_task_store
+        from app.services.dicom_service import DicomService
+        from app.services.reconstruction_service import ReconstructionService
+
+        study_id = examen.study_instance_uid
+
+        analyse_service.bump_generation(study_id)
+        analyse_task_store.remove(study_id)
+        ReconstructionService.clear_study_cache(study_id)
+        DicomService.clear_volume_cache()
+
+        study_path = Path(examen.dicom_path)
+        if study_path.exists():
+            shutil.rmtree(study_path)
+        else:
+            fallback = settings.UPLOAD_DIR / study_id
+            if fallback.exists():
+                shutil.rmtree(fallback)
+
+        resultat = (
+            db.query(ResultatAnalyse)
+            .filter(ResultatAnalyse.study_instance_uid == study_id)
+            .first()
+        )
+        if resultat is not None:
+            db.delete(resultat)
+
+        patient_id = examen.patient_id
+        db.delete(examen)
+        db.flush()
+
+        remaining = (
+            db.query(Examen).filter(Examen.patient_id == patient_id).count()
+        )
+        if remaining == 0:
+            patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+            if patient is not None:
+                db.delete(patient)
+
+        db.commit()
+
     def list_examens(
         self,
         db: Session,
@@ -179,11 +231,16 @@ class ExamenService:
         search: str | None = None,
         result_filter: ResultFilter = "all",
         period: PeriodFilter = "all",
+        uploaded_by: int | None = None,
+        include_uploader: bool = False,
     ) -> dict[str, Any]:
         query = db.query(Examen).outerjoin(
             ResultatAnalyse,
             Examen.study_instance_uid == ResultatAnalyse.study_instance_uid,
         )
+
+        if uploaded_by is not None:
+            query = query.filter(Examen.uploaded_by == uploaded_by)
 
         if search and search.strip():
             term = search.strip().lower()
@@ -226,10 +283,16 @@ class ExamenService:
             )
             resultats_by_study = {r.study_instance_uid: r for r in resultats}
 
+        uploaders: dict[int, str] = {}
+        if include_uploader and examens:
+            uploader_ids = {ex.uploaded_by for ex in examens}
+            users = db.query(Utilisateur).filter(Utilisateur.id.in_(uploader_ids)).all()
+            uploaders = {user.id: user.nom for user in users}
+
         items: list[dict[str, Any]] = []
         for examen in examens:
             resultat = resultats_by_study.get(examen.study_instance_uid)
-            display_date = examen.date_examen or examen.uploaded_at
+            display_date = examen_display_datetime(examen)
 
             vertebres: list[str] = []
             score_global: float | None = None
@@ -253,6 +316,8 @@ class ExamenService:
                     "score_global": score_global,
                     "fracture_detectee": fracture_detectee,
                     "analysed": analysed,
+                    "uploaded_by": examen.uploaded_by,
+                    "medecin_nom": uploaders.get(examen.uploaded_by) if include_uploader else None,
                 }
             )
 

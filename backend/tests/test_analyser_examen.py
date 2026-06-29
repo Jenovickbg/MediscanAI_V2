@@ -71,13 +71,17 @@ def test_agreger_par_vertebre_skips_hors_zone():
         10: {"bbox": [100, 120, 30, 28], "confidence": 0.9},
         11: {"bbox": [200, 180, 25, 22], "confidence": 0.7},
     }
-    vertebre = {10: "C5", 11: "hors_zone"}
+    vertebre = {
+        10: {"vertebre": "C5", "confiance": 0.91},
+        11: {"vertebre": "hors_zone", "confiance": 0.88},
+    }
 
     aggregated = pipeline_service._agreger_par_vertebre(triage, bbox, vertebre)
 
     assert "C5" in aggregated
     assert "hors_zone" not in aggregated
     assert aggregated["C5"]["probabilite"] == 0.85
+    assert aggregated["C5"]["confiance_vertebre"] == 0.91
     assert aggregated["C5"]["bounding_box"] == {"x": 100, "y": 120, "w": 30, "h": 28}
     assert aggregated["C5"]["coupe_reference"] == 10
     assert aggregated["C5"]["niveau_risque"] == classifier_triage(0.85, load_triage_thresholds())
@@ -92,7 +96,7 @@ def test_agreger_par_vertebre_keeps_highest_score_per_vertebra():
         5: {"bbox": [10, 10, 20, 20], "confidence": 0.6},
         6: {"bbox": [30, 30, 25, 25], "confidence": 0.95},
     }
-    vertebre = {5: "C4", 6: "C4"}
+    vertebre = {5: {"vertebre": "C4", "confiance": 0.8}, 6: {"vertebre": "C4", "confiance": 0.95}}
 
     aggregated = pipeline_service._agreger_par_vertebre(triage, bbox, vertebre)
 

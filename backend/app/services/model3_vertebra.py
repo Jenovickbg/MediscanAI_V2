@@ -6,12 +6,14 @@ from typing import Any
 
 import numpy as np
 
-from app.core.config import BACKEND_DIR, settings
+from app.core.config import settings
 from app.models.resultat import VERTEBRES
+from app.utils.model_paths import resolve_model_path
+from app.utils.runtime import is_ia_mock_forced
 
 logger = logging.getLogger(__name__)
 
-VERTEBRA_CLASSES: tuple[str, ...] = (
+VERTEBRA_CLASSES_8: tuple[str, ...] = (
     "hors_zone",
     "C1",
     "C2",
@@ -22,20 +24,47 @@ VERTEBRA_CLASSES: tuple[str, ...] = (
     "C7",
 )
 
+VERTEBRA_CLASSES_7: tuple[str, ...] = tuple(VERTEBRES)
+
+VERTEBRA_CLASSES = VERTEBRA_CLASSES_7
+
+
+def _infer_num_classes(state: dict[str, Any]) -> int:
+    for key in ("classifier.weight", "classifier.bias"):
+        if key in state:
+            return int(state[key].shape[0])
+    raise ValueError("Impossible de déduire num_classes depuis le state_dict")
+
+
+def _classes_for_num_classes(num_classes: int) -> tuple[str, ...]:
+    if num_classes == 7:
+        return VERTEBRA_CLASSES_7
+    if num_classes == 8:
+        return VERTEBRA_CLASSES_8
+    raise ValueError(f"num_classes non supporté pour le Modèle 3 : {num_classes}")
+
 
 class Model3VertebraService:
-    """Modèle 3 — DenseNet-121 2.5D (classification vertèbre C1–C7 + hors_zone)."""
+    """Modèle 3 — DenseNet-121 2.5D (classification vertèbre C1–C7)."""
 
     def __init__(self) -> None:
         self.model: Any = None
         self.device: Any = None
         self.use_mock = True
         self.model_loaded = False
+        self.vertebra_classes: tuple[str, ...] = VERTEBRA_CLASSES_7
         self._try_load()
 
     def _try_load(self) -> None:
-        model_path = BACKEND_DIR / settings.MODEL_3_PATH
-        if not model_path.exists():
+        if is_ia_mock_forced():
+            logger.info("MEDISCANAI_FORCE_MOCK — Modèle 3 en mode mock")
+            return
+
+        model_path = resolve_model_path(
+            settings.MODEL_3_PATH,
+            "model/model3_vertebre_densenet121.pth",
+        )
+        if model_path is None:
             logger.info(
                 "Modèle 3 absent (%s) — mode mock activé",
                 settings.MODEL_3_PATH,
@@ -46,24 +75,32 @@ class Model3VertebraService:
             import torch
             import timm
 
+            try:
+                state = torch.load(model_path, map_location="cpu", weights_only=True)
+            except TypeError:
+                state = torch.load(model_path, map_location="cpu")
+
+            num_classes = _infer_num_classes(state)
+            self.vertebra_classes = _classes_for_num_classes(num_classes)
+
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model = timm.create_model(
                 "densenet121",
                 pretrained=False,
                 in_chans=5,
-                num_classes=len(VERTEBRA_CLASSES),
+                num_classes=num_classes,
                 drop_rate=0.0,
             )
-            try:
-                state = torch.load(model_path, map_location="cpu", weights_only=True)
-            except TypeError:
-                state = torch.load(model_path, map_location="cpu")
             self.model.load_state_dict(state)
             self.model.eval()
             self.model.to(self.device)
             self.use_mock = False
             self.model_loaded = True
-            logger.info("Modèle 3 (DenseNet-121 vertèbre) chargé sur %s", self.device)
+            logger.info(
+                "Modèle 3 (DenseNet-121 vertèbre, %d classes) chargé sur %s",
+                num_classes,
+                self.device,
+            )
         except Exception as exc:
             logger.warning("Impossible de charger le Modèle 3 — mode mock: %s", exc)
             self.model = None
@@ -75,24 +112,26 @@ class Model3VertebraService:
         segment = min(int(slice_idx / max(n_slices, 1) * 7), 6)
         return VERTEBRES[segment]
 
-    def _mock_vertebra(self, slice_idx: int, n_slices: int, study_id: str) -> str:
+    def _mock_vertebra(self, slice_idx: int, n_slices: int, study_id: str) -> dict[str, Any]:
         """Prédiction déterministe basée sur la position anatomique de la coupe."""
         seed = abs(hash(f"{study_id}:{slice_idx}:model3")) % (2**32)
         rng = np.random.default_rng(seed)
 
         edge_ratio = slice_idx / max(n_slices - 1, 1)
-        if edge_ratio < 0.04 or edge_ratio > 0.96:
-            if float(rng.uniform(0, 1)) < 0.35:
-                return "hors_zone"
+        if "hors_zone" in self.vertebra_classes:
+            if edge_ratio < 0.04 or edge_ratio > 0.96:
+                if float(rng.uniform(0, 1)) < 0.35:
+                    return {"vertebre": "hors_zone", "confiance": 0.55}
 
-        return self._slice_to_vertebra(slice_idx, n_slices)
+        vertebre = self._slice_to_vertebra(slice_idx, n_slices)
+        return {"vertebre": vertebre, "confiance": float(rng.uniform(0.72, 0.96))}
 
     def _predict_slice(
         self,
         volume: np.ndarray,
         slice_idx: int,
         stack_builder: Callable[[np.ndarray, int], np.ndarray],
-    ) -> str:
+    ) -> dict[str, Any]:
         import torch
 
         assert self.model is not None and self.device is not None
@@ -102,9 +141,13 @@ class Model3VertebraService:
 
         with torch.no_grad():
             logits = self.model(tensor)
-            pred_idx = int(logits.argmax(dim=1).item())
+            probs = torch.softmax(logits, dim=1)[0].cpu().numpy()
+            pred_idx = int(probs.argmax())
 
-        return VERTEBRA_CLASSES[pred_idx]
+        return {
+            "vertebre": self.vertebra_classes[pred_idx],
+            "confiance": float(probs[pred_idx]),
+        }
 
     def run(
         self,
@@ -112,11 +155,11 @@ class Model3VertebraService:
         coupes_a_traiter: list[int],
         study_id: str = "",
         stack_builder: Callable[[np.ndarray, int], np.ndarray] | None = None,
-    ) -> dict[int, str]:
+    ) -> dict[int, dict[str, Any]]:
         """
         Classifie la vertèbre sur les coupes flaguées uniquement.
 
-        Retourne { slice_idx: "C5" } (ou autre label, y compris hors_zone).
+        Retourne { slice_idx: {"vertebre": "C5", "confiance": 0.92} }.
         """
         if not coupes_a_traiter:
             return {}
@@ -125,17 +168,15 @@ class Model3VertebraService:
             raise ValueError("stack_builder requis pour le Modèle 3 (empilement 2.5D)")
 
         n_slices = volume.shape[0]
-        resultats: dict[int, str] = {}
+        resultats: dict[int, dict[str, Any]] = {}
 
         for slice_idx in coupes_a_traiter:
             if slice_idx < 0 or slice_idx >= n_slices:
                 continue
 
             if self.use_mock or self.model is None:
-                label = self._mock_vertebra(slice_idx, n_slices, study_id)
+                resultats[int(slice_idx)] = self._mock_vertebra(slice_idx, n_slices, study_id)
             else:
-                label = self._predict_slice(volume, slice_idx, stack_builder)
-
-            resultats[int(slice_idx)] = label
+                resultats[int(slice_idx)] = self._predict_slice(volume, slice_idx, stack_builder)
 
         return resultats

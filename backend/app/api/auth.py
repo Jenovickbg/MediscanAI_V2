@@ -20,6 +20,12 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
             detail="Email ou mot de passe incorrect",
         )
 
+    if not user.actif:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Compte désactivé. Contactez l'administrateur.",
+        )
+
     access_token = create_access_token(data={"sub": user.email})
     return TokenResponse(
         access_token=access_token,

@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Eye } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Eye, Trash2 } from 'lucide-react'
 
+import { useAuthStore } from '../../store/authStore'
 import type { ExamenListItem } from '../../types/examen'
 import { Badge, Button, Card, CardBody, CardHeader, LoadingSpinner } from '../ui'
 
@@ -11,6 +12,8 @@ interface ExamenHistoryTableProps {
   total: number
   limit: number
   onPageChange: (page: number) => void
+  onDelete?: (exam: ExamenListItem) => void
+  deletingStudyId?: string | null
 }
 
 function formatDate(iso: string): string {
@@ -35,8 +38,11 @@ export function ExamenHistoryTable({
   total,
   limit,
   onPageChange,
+  onDelete,
+  deletingStudyId,
 }: ExamenHistoryTableProps) {
   const navigate = useNavigate()
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const totalPages = Math.max(1, Math.ceil(total / limit))
   const rangeStart = total === 0 ? 0 : (page - 1) * limit + 1
   const rangeEnd = Math.min(page * limit, total)
@@ -66,7 +72,8 @@ export function ExamenHistoryTable({
               <thead>
                 <tr className="border-b border-border bg-bg-secondary/50 text-xs uppercase tracking-wide text-text-muted">
                   <th className="px-4 py-3 font-medium">Patient ID</th>
-                  <th className="px-4 py-3 font-medium">Date</th>
+                  {isAdmin && <th className="px-4 py-3 font-medium">Médecin</th>}
+                  <th className="px-4 py-3 font-medium">Date import</th>
                   <th className="px-4 py-3 font-medium">Coupes</th>
                   <th className="px-4 py-3 font-medium">Vertèbres</th>
                   <th className="px-4 py-3 font-medium">Score</th>
@@ -84,6 +91,11 @@ export function ExamenHistoryTable({
                     <td className="px-4 py-3 font-mono text-text-primary">
                       {exam.patient_id}
                     </td>
+                    {isAdmin && (
+                      <td className="px-4 py-3 text-text-secondary">
+                        {exam.medecin_nom ?? '—'}
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-text-secondary">
                       {formatDate(exam.date)}
                     </td>
@@ -108,17 +120,34 @@ export function ExamenHistoryTable({
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <Button
-                        variant="ghost"
-                        className="h-8 px-2 text-xs"
-                        icon={<Eye className="h-3.5 w-3.5" />}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          navigate(`/viewer/${exam.study_id}`)
-                        }}
-                      >
-                        Voir
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          className="h-8 px-2 text-xs"
+                          icon={<Eye className="h-3.5 w-3.5" />}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            navigate(`/viewer/${exam.study_id}`)
+                          }}
+                        >
+                          Voir
+                        </Button>
+                        {onDelete && (
+                          <Button
+                            variant="ghost"
+                            className="h-8 px-2 text-xs text-danger hover:text-danger"
+                            aria-label="Supprimer"
+                            icon={<Trash2 className="h-3.5 w-3.5" />}
+                            loading={deletingStudyId === exam.study_id}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onDelete(exam)
+                            }}
+                          >
+                            Supprimer
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

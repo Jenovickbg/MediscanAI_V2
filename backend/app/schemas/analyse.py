@@ -17,6 +17,7 @@ class VertebreResultatSchema(BaseModel):
     bounding_box: BoundingBoxSchema | None = None
     coupe_reference: int
     niveau_risque: str
+    confiance_vertebre: float | None = None
 
 
 class ResultatAnalyseSchema(BaseModel):

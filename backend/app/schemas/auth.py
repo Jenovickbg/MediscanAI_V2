@@ -19,6 +19,7 @@ class UserSchema(BaseModel):
     email: EmailStr
     nom: str
     role: RoleUtilisateur
+    actif: bool = True
     created_at: datetime
 
     model_config = {"from_attributes": True}

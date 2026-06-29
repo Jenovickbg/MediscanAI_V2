@@ -121,6 +121,11 @@ export function VertebraScorePanel({
                   </div>
                   <p className="mb-1.5 text-[10px] uppercase tracking-wide text-text-muted">
                     {niveauLabel(score.niveau_risque)}
+                    {score.confiance_vertebre != null && score.niveau_risque !== 'normal' && (
+                      <span className="ml-1 normal-case text-text-secondary">
+                        · Vertèbre identifiée à {(score.confiance_vertebre * 100).toFixed(0)}%
+                      </span>
+                    )}
                   </p>
                   <ProgressBar
                     value={pct}

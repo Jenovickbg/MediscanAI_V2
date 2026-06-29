@@ -59,6 +59,8 @@ class ExamenListItemSchema(BaseModel):
     score_global: float | None = None
     fracture_detectee: bool | None = None
     analysed: bool = False
+    uploaded_by: int | None = None
+    medecin_nom: str | None = None
 
 
 class ExamenListResponse(BaseModel):

@@ -15,7 +15,8 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     current_user: Utilisateur = Depends(get_current_user),
 ) -> DashboardStatsSchema:
-    data = stats_service.get_dashboard(db)
+    uploaded_by = current_user.id if current_user.role == "medecin" else None
+    data = stats_service.get_dashboard(db, uploaded_by=uploaded_by)
     return DashboardStatsSchema.model_validate(data)
 
 
@@ -25,5 +26,6 @@ def get_historique_stats(
     db: Session = Depends(get_db),
     current_user: Utilisateur = Depends(get_current_user),
 ) -> HistoriqueStatsSchema:
-    data = stats_service.get_historique(db, period=period)  # type: ignore[arg-type]
+    uploaded_by = current_user.id if current_user.role == "medecin" else None
+    data = stats_service.get_historique(db, period=period, uploaded_by=uploaded_by)  # type: ignore[arg-type]
     return HistoriqueStatsSchema.model_validate(data)
